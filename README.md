@@ -16,6 +16,7 @@ live here as installable plugins that register through the
 | `kestrel-llm-xai` | `xai:api` | Cloud, OpenAI-compatible Grok | First wave |
 | `kestrel-llm-kimi` | `kimi:api` | Cloud, OpenAI-compatible Moonshot/Kimi | First wave |
 | `kestrel-llm-llama-cpp` | `llama_cpp:local` | Local/LAN OpenAI-compatible server | First wave |
+| `kestrel-llm-openai-compat` | n/a | Shared OpenAI-compatible adapter helpers | Internal helper |
 | `kestrel-llms` | n/a | Meta-package with install extras | First wave |
 
 ## Monorepo Rules

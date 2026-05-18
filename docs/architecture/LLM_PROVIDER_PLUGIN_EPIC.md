@@ -12,6 +12,7 @@ in this monorepo as separately published provider packages.
 - xAI/Grok: KestrelSovereignAI/kestrel-sovereign#1283
 - Kimi/Moonshot: KestrelSovereignAI/kestrel-sovereign#1281
 - llama.cpp: KestrelSovereignAI/kestrel-sovereign#1286
+- Shared OpenAI-compatible helpers: part of first-wave package hardening.
 - Build and publish pipeline: KestrelSovereignAI/kestrel-sovereign#1285
 - Claude CLI review gate: KestrelSovereignAI/kestrel-sovereign#1284
 
@@ -23,4 +24,3 @@ in this monorepo as separately published provider packages.
 - `scripts/llm_provider_packages.sh verify` compiles, builds, and tests all
   packages.
 - Every PR includes a Claude CLI review.
-

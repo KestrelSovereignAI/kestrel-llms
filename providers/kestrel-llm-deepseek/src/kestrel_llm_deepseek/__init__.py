@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any, AsyncIterator, Dict, List, Optional, Type
 
 import openai
 from pydantic import BaseModel
 
+from kestrel_llm_openai_compat import (
+    REASONING_COMPLETION_KWARGS,
+    completion_kwargs,
+    to_llm_response,
+)
 from kestrel_sdk.llm import (
     LLMAdapter,
     LLMResponse,
     ModelCategory,
     ModelInfo,
     ProviderInfo,
-    ToolCall,
 )
 
 
@@ -27,7 +30,9 @@ class DeepSeekAdapter(LLMAdapter):
 
     @classmethod
     def create_provider(cls, config: Dict[str, Any]) -> ProviderInfo:
-        api_key = config.get("api_key") or os.environ.get(config.get("api_key_env") or cls.env_var)
+        api_key = config.get("api_key") or os.environ.get(
+            config.get("api_key_env") or cls.env_var
+        )
         if not api_key:
             raise ValueError(f"deepseek:api requires {config.get('api_key_env') or cls.env_var}")
         base_url = config.get("base_url") or cls.default_base_url
@@ -67,9 +72,15 @@ class DeepSeekAdapter(LLMAdapter):
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        extra = _completion_kwargs(format, tools, response_format, kwargs)
+        extra = completion_kwargs(
+            format,
+            tools,
+            response_format,
+            kwargs,
+            passthrough_keys=REASONING_COMPLETION_KWARGS,
+        )
         response = await client.chat.completions.create(model=model, messages=messages, **extra)
-        return _to_llm_response(response)
+        return to_llm_response(response)
 
     async def get_streaming_response(
         self,
@@ -80,7 +91,13 @@ class DeepSeekAdapter(LLMAdapter):
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
-        extra = _completion_kwargs(None, tools, response_format, kwargs)
+        extra = completion_kwargs(
+            None,
+            tools,
+            response_format,
+            kwargs,
+            passthrough_keys=REASONING_COMPLETION_KWARGS,
+        )
         stream = await client.chat.completions.create(
             model=model,
             messages=messages,
@@ -107,59 +124,3 @@ class DeepSeekAdapter(LLMAdapter):
             for item in getattr(models, "data", [])
             if getattr(item, "id", None)
         ]
-
-
-def _completion_kwargs(
-    format: Optional[str],
-    tools: Optional[List[Dict[str, Any]]],
-    response_format: Optional[Type[BaseModel]],
-    kwargs: Dict[str, Any],
-) -> Dict[str, Any]:
-    extra: Dict[str, Any] = {}
-    if response_format is not None and issubclass(response_format, BaseModel):
-        schema = response_format.model_json_schema()
-        schema["additionalProperties"] = False
-        extra["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {"name": response_format.__name__, "schema": schema, "strict": True},
-        }
-    elif format == "json":
-        extra["response_format"] = {"type": "json_object"}
-    if tools:
-        extra["tools"] = tools
-        extra["tool_choice"] = "auto"
-    if "max_tokens" in kwargs:
-        extra["max_completion_tokens"] = kwargs["max_tokens"]
-    for key in (
-        "temperature",
-        "top_p",
-        "frequency_penalty",
-        "presence_penalty",
-        "reasoning_effort",
-        "extra_body",
-    ):
-        if key in kwargs:
-            extra[key] = kwargs[key]
-    return extra
-
-
-def _to_llm_response(response: Any) -> LLMResponse:
-    message = response.choices[0].message
-    tool_calls = None
-    if getattr(message, "tool_calls", None):
-        tool_calls = []
-        for call in message.tool_calls:
-            try:
-                args = json.loads(call.function.arguments)
-            except json.JSONDecodeError:
-                args = {"_raw": call.function.arguments}
-            tool_calls.append(ToolCall(id=call.id, name=call.function.name, arguments=args))
-    usage = getattr(response, "usage", None)
-    return LLMResponse(
-        content=getattr(message, "content", None),
-        tool_calls=tool_calls,
-        raw=response,
-        input_tokens=getattr(usage, "prompt_tokens", None),
-        output_tokens=getattr(usage, "completion_tokens", None),
-        total_tokens=getattr(usage, "total_tokens", None),
-    )

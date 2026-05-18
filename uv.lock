@@ -11,6 +11,7 @@ members = [
     "kestrel-llm-deepseek",
     "kestrel-llm-kimi",
     "kestrel-llm-llama-cpp",
+    "kestrel-llm-openai-compat",
     "kestrel-llm-xai",
     "kestrel-llms",
     "kestrel-llms-workspace",
@@ -1131,6 +1132,7 @@ name = "kestrel-llm-deepseek"
 version = "0.1.0"
 source = { editable = "providers/kestrel-llm-deepseek" }
 dependencies = [
+    { name = "kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk" },
     { name = "openai" },
     { name = "pydantic" },
@@ -1138,6 +1140,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk", specifier = ">=0.14,<1" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
@@ -1148,6 +1151,7 @@ name = "kestrel-llm-kimi"
 version = "0.1.0"
 source = { editable = "providers/kestrel-llm-kimi" }
 dependencies = [
+    { name = "kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk" },
     { name = "openai" },
     { name = "pydantic" },
@@ -1155,6 +1159,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk", specifier = ">=0.14,<1" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
@@ -1165,6 +1170,7 @@ name = "kestrel-llm-llama-cpp"
 version = "0.1.0"
 source = { editable = "providers/kestrel-llm-llama-cpp" }
 dependencies = [
+    { name = "kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk" },
     { name = "openai" },
     { name = "pydantic" },
@@ -1172,8 +1178,24 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk", specifier = ">=0.14,<1" },
     { name = "openai", specifier = ">=1.0" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[[package]]
+name = "kestrel-llm-openai-compat"
+version = "0.1.0"
+source = { editable = "providers/kestrel-llm-openai-compat" }
+dependencies = [
+    { name = "kestrel-sovereign-sdk" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.14,<1" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
@@ -1182,6 +1204,7 @@ name = "kestrel-llm-xai"
 version = "0.1.0"
 source = { editable = "providers/kestrel-llm-xai" }
 dependencies = [
+    { name = "kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk" },
     { name = "openai" },
     { name = "pydantic" },
@@ -1189,6 +1212,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
     { name = "kestrel-sovereign-sdk", specifier = ">=0.14,<1" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
