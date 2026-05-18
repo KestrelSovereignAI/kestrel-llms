@@ -1,0 +1,33 @@
+[project]
+name = "kestrel-llms"
+version = "0.1.0"
+description = "Convenience extras for Kestrel Sovereign LLM provider plugins."
+requires-python = ">=3.11"
+dependencies = [
+    "kestrel-sovereign-sdk>=0.14,<1",
+]
+
+[project.optional-dependencies]
+deepseek = ["kestrel-llm-deepseek==0.1.0"]
+xai = ["kestrel-llm-xai==0.1.0"]
+kimi = ["kestrel-llm-kimi==0.1.0"]
+llama-cpp = ["kestrel-llm-llama-cpp==0.1.0"]
+cloud = [
+    "kestrel-llm-deepseek==0.1.0",
+    "kestrel-llm-xai==0.1.0",
+    "kestrel-llm-kimi==0.1.0",
+]
+local = [
+    "kestrel-llm-llama-cpp==0.1.0",
+]
+all = [
+    "kestrel-llm-deepseek==0.1.0",
+    "kestrel-llm-xai==0.1.0",
+    "kestrel-llm-kimi==0.1.0",
+    "kestrel-llm-llama-cpp==0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

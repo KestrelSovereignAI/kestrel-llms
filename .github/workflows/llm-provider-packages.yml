@@ -1,0 +1,41 @@
+name: LLM Provider Packages
+
+on:
+  pull_request:
+    paths:
+      - "providers/**"
+      - "tests/unit/providers/**"
+      - "scripts/llm_provider_packages.sh"
+      - ".github/workflows/llm-provider-packages.yml"
+  push:
+    branches: [main]
+    paths:
+      - "providers/**"
+      - "tests/unit/providers/**"
+      - "scripts/llm_provider_packages.sh"
+      - ".github/workflows/llm-provider-packages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  provider-packages:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Install Kestrel test environment
+        run: uv sync --group test
+
+      - name: Verify provider packages
+        run: scripts/llm_provider_packages.sh verify
+

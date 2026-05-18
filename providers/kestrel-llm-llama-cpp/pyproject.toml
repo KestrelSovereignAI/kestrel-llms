@@ -1,0 +1,18 @@
+[project]
+name = "kestrel-llm-llama-cpp"
+version = "0.1.0"
+description = "llama.cpp OpenAI-compatible local LLM provider plugin for Kestrel Sovereign."
+requires-python = ">=3.11"
+dependencies = [
+    "kestrel-sovereign-sdk>=0.14,<1",
+    "openai>=1.0",
+    "pydantic>=2",
+]
+
+[project.entry-points."kestrel_sovereign.llm_providers"]
+llama_cpp = "kestrel_llm_llama_cpp:LlamaCppAdapter"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
