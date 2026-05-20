@@ -16,8 +16,8 @@ in this monorepo as separately published provider packages.
 - Claude CLI review gate: KestrelSovereignAI/kestrel-sovereign#1284
 
 `llama.cpp` is resolved in Kestrel core as a local OpenAI-compatible route, not
-as a first-wave external provider. The plugin package is experimental and is
-not included in the `kestrel-llms` meta-package.
+as a first-wave external provider. It is intentionally omitted from this
+monorepo to avoid duplicate local-provider behavior.
 
 ## Acceptance
 

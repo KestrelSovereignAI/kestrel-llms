@@ -9,19 +9,19 @@ I can't write the review file in the current permission mode. Here's the review 
 ## Findings
 
 ### 1. Duplicated `_completion_kwargs` / `_to_llm_response` helpers (Medium)
-All four providers copy-paste identical helper functions. They already drift — llama.cpp omits `reasoning_effort` from pass-through kwargs. Extract into a shared internal module.
+The OpenAI-compatible providers copy-paste identical helper functions. Extract into a shared internal module.
 
 ### 2. Meta-package pins exact versions (Medium)
 `providers/kestrel-llms/pyproject.toml` — extras pin `==0.1.0`. This breaks the moment any provider ships 0.1.1. Use `~=0.1.0` or `>=0.1.0,<0.2`.
 
 ### 3. `LlamaCppAdapter` missing `key_env_var()` and `deliberation_style()` (Low)
-`providers/kestrel-llm-llama-cpp/src/kestrel_llm_llama_cpp/__init__.py` — DeepSeek, xAI, and Kimi all implement these methods; LlamaCppAdapter doesn't. If the base class expects them, this fails at runtime.
+Resolved by removing the duplicate llama.cpp package from the monorepo; core owns llama.cpp support.
 
 ### 4. Code formatting: extreme line lengths (Low)
-Kimi, xAI, and llama.cpp providers have 200+ char lines (method signatures, comprehensions) while DeepSeek uses clean multi-line formatting. Apply ruff/black consistently.
+Kimi and xAI providers have 200+ char lines (method signatures, comprehensions) while DeepSeek uses clean multi-line formatting. Apply ruff/black consistently.
 
 ### 5. Test config route mismatch (Low)
-`tests/unit/providers/test_llm_provider_plugins.py:137` — `"llama_cpp": {"routes": {"api": {}}}` but the adapter creates route `"local"`, not `"api"`. Misleading and could mask bugs if the registry ever validates route names.
+Resolved by removing the duplicate llama.cpp package from the monorepo; core owns llama.cpp support.
 
 ### 6. Tests import kestrel-sovereign internals (Info)
 Tests import `ProviderRegistry` from `kestrel_sovereign.llm.provider_registry` rather than through the SDK. Fine for now since the workspace depends on core, but creates coupling.

@@ -18,11 +18,10 @@ live here as installable plugins that register through the
 | `kestrel-llm-openai-compat` | n/a | Shared OpenAI-compatible adapter helpers | Internal helper |
 | `kestrel-llms` | n/a | Meta-package with install extras | First wave, cloud providers only |
 
-`llama.cpp` is intentionally not part of the first-wave plugin set. Kestrel
-core already supports `llama_cpp` as a local OpenAI-compatible route through
+`llama.cpp` is intentionally not part of this plugin monorepo. Kestrel core
+already supports `llama_cpp` as a local OpenAI-compatible route through
 `OpenAIAdapter`, including local/no-key auth, local privacy routing, prompt
-cache body extensions, and model mismatch guards. The experimental
-`kestrel-llm-llama-cpp` package is not referenced by the meta-package.
+cache body extensions, and model mismatch guards.
 
 ## Monorepo Rules
 

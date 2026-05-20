@@ -12,7 +12,6 @@ for src in [
     ROOT / "providers/kestrel-llm-deepseek/src",
     ROOT / "providers/kestrel-llm-xai/src",
     ROOT / "providers/kestrel-llm-kimi/src",
-    ROOT / "providers/kestrel-llm-llama-cpp/src",
     ROOT / "providers/kestrel-llm-openai-compat/src",
 ]:
     sys.path.insert(0, str(src))
@@ -84,32 +83,9 @@ def test_kimi_accepts_kimi_api_key_alias(monkeypatch):
     assert async_openai.call_args.kwargs["api_key"] == "sk-kimi"
 
 
-def test_llama_cpp_factory_is_local_without_api_key(monkeypatch):
-    import kestrel_llm_llama_cpp
-
-    monkeypatch.delenv("LLAMA_CPP_API_KEY", raising=False)
-    monkeypatch.delenv("LLAMA_CPP_BASE_URL", raising=False)
-    fake_client = MagicMock()
-
-    with patch.object(kestrel_llm_llama_cpp.openai, "AsyncOpenAI", return_value=fake_client) as async_openai:
-        info = kestrel_llm_llama_cpp.LlamaCppAdapter.create_provider({})
-
-    async_openai.assert_called_once_with(
-        api_key="local",
-        base_url="http://localhost:8000/v1",
-        max_retries=0,
-    )
-    assert info.name == "llama_cpp:local"
-    assert info.vendor == "llama_cpp"
-    assert info.route == "local"
-    assert info.is_cloud is False
-    assert info.is_local is True
-
-
 def test_registry_discovers_first_wave_plugins(monkeypatch):
     import kestrel_llm_deepseek
     import kestrel_llm_kimi
-    import kestrel_llm_llama_cpp
     import kestrel_llm_xai
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
@@ -120,15 +96,13 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         _entry_point("deepseek", kestrel_llm_deepseek.DeepSeekAdapter),
         _entry_point("xai", kestrel_llm_xai.XAIAdapter),
         _entry_point("kimi", kestrel_llm_kimi.KimiAdapter),
-        _entry_point("llama_cpp", kestrel_llm_llama_cpp.LlamaCppAdapter),
     ]
     config = {
-        "route_priority": ["deepseek:api", "xai:api", "kimi:api", "llama_cpp:local"],
+        "route_priority": ["deepseek:api", "xai:api", "kimi:api"],
         "vendors": {
             "deepseek": {"routes": {"api": {}}},
             "xai": {"routes": {"api": {}}},
             "kimi": {"routes": {"api": {}}},
-            "llama_cpp": {"is_cloud": False, "routes": {"local": {}}},
         },
     }
 
@@ -137,7 +111,6 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         patch.object(kestrel_llm_deepseek.openai, "AsyncOpenAI", return_value=MagicMock()),
         patch.object(kestrel_llm_xai.openai, "AsyncOpenAI", return_value=MagicMock()),
         patch.object(kestrel_llm_kimi.openai, "AsyncOpenAI", return_value=MagicMock()),
-        patch.object(kestrel_llm_llama_cpp.openai, "AsyncOpenAI", return_value=MagicMock()),
     ):
         providers = ProviderRegistry(config).initialize_providers()
 
@@ -145,9 +118,8 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         "deepseek:api",
         "xai:api",
         "kimi:api",
-        "llama_cpp:local",
     ]
-    assert {provider.name for provider in providers if provider.is_local} == {"llama_cpp:local"}
+    assert {provider.name for provider in providers if provider.is_local} == set()
     assert {provider.name for provider in providers if provider.is_cloud} == {
         "deepseek:api",
         "xai:api",
@@ -170,7 +142,6 @@ def _load_pyproject(package: str) -> dict:
         ("kestrel-llm-deepseek", "deepseek"),
         ("kestrel-llm-xai", "xai"),
         ("kestrel-llm-kimi", "kimi"),
-        ("kestrel-llm-llama-cpp", "llama_cpp"),
     ],
 )
 def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
