@@ -15,9 +15,14 @@ live here as installable plugins that register through the
 | `kestrel-llm-deepseek` | `deepseek:api` | Cloud, OpenAI-compatible | First wave |
 | `kestrel-llm-xai` | `xai:api` | Cloud, OpenAI-compatible Grok | First wave |
 | `kestrel-llm-kimi` | `kimi:api` | Cloud, OpenAI-compatible Moonshot/Kimi | First wave |
-| `kestrel-llm-llama-cpp` | `llama_cpp:local` | Local/LAN OpenAI-compatible server | First wave |
 | `kestrel-llm-openai-compat` | n/a | Shared OpenAI-compatible adapter helpers | Internal helper |
-| `kestrel-llms` | n/a | Meta-package with install extras | First wave |
+| `kestrel-llms` | n/a | Meta-package with install extras | First wave, cloud providers only |
+
+`llama.cpp` is intentionally not part of the first-wave plugin set. Kestrel
+core already supports `llama_cpp` as a local OpenAI-compatible route through
+`OpenAIAdapter`, including local/no-key auth, local privacy routing, prompt
+cache body extensions, and model mismatch guards. The experimental
+`kestrel-llm-llama-cpp` package is not referenced by the meta-package.
 
 ## Monorepo Rules
 
@@ -41,7 +46,6 @@ Future convenience meta-package:
 ```bash
 pip install "kestrel-llms[deepseek,xai,kimi]"
 pip install "kestrel-llms[cloud]"
-pip install "kestrel-llms[local]"
 pip install "kestrel-llms[all]"
 ```
 
@@ -73,7 +77,6 @@ kestrel-llm-openai-compat
 kestrel-llm-deepseek
 kestrel-llm-xai
 kestrel-llm-kimi
-kestrel-llm-llama-cpp
 kestrel-llms
 ```
 

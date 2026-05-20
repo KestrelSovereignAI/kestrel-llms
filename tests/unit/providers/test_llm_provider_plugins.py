@@ -190,18 +190,16 @@ def test_meta_package_extras_track_first_wave_packages():
     pyproject = _load_pyproject("kestrel-llms")
     extras = pyproject["project"]["optional-dependencies"]
 
-    assert set(extras) == {"deepseek", "xai", "kimi", "llama-cpp", "cloud", "local", "all"}
+    assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
     assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.0,<0.2"]
     assert extras["xai"] == ["kestrel-llm-xai>=0.1.0,<0.2"]
     assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.0,<0.2"]
-    assert extras["llama-cpp"] == ["kestrel-llm-llama-cpp>=0.1.0,<0.2"]
     assert set(extras["cloud"]) == {
         "kestrel-llm-deepseek>=0.1.0,<0.2",
         "kestrel-llm-xai>=0.1.0,<0.2",
         "kestrel-llm-kimi>=0.1.0,<0.2",
     }
-    assert extras["local"] == ["kestrel-llm-llama-cpp>=0.1.0,<0.2"]
-    assert set(extras["all"]) == set(extras["cloud"]) | set(extras["local"])
+    assert set(extras["all"]) == set(extras["cloud"])
 
 
 def test_shared_openai_compat_package_has_no_entry_point():

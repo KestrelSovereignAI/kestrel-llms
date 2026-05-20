@@ -13,8 +13,7 @@ name: Publish to PyPI
 #   2. kestrel-llm-deepseek
 #   3. kestrel-llm-xai
 #   4. kestrel-llm-kimi
-#   5. kestrel-llm-llama-cpp
-#   6. kestrel-llms
+#   5. kestrel-llms
 
 on:
   workflow_dispatch:
@@ -28,7 +27,6 @@ on:
           - kestrel-llm-deepseek
           - kestrel-llm-xai
           - kestrel-llm-kimi
-          - kestrel-llm-llama-cpp
           - kestrel-llms
       ref:
         description: "Git ref to publish"

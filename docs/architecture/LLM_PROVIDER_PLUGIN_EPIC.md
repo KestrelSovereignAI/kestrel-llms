@@ -11,10 +11,13 @@ in this monorepo as separately published provider packages.
 - DeepSeek: KestrelSovereignAI/kestrel-sovereign#1282
 - xAI/Grok: KestrelSovereignAI/kestrel-sovereign#1283
 - Kimi/Moonshot: KestrelSovereignAI/kestrel-sovereign#1281
-- llama.cpp: KestrelSovereignAI/kestrel-sovereign#1286
 - Shared OpenAI-compatible helpers: part of first-wave package hardening.
 - Build and publish pipeline: KestrelSovereignAI/kestrel-sovereign#1285
 - Claude CLI review gate: KestrelSovereignAI/kestrel-sovereign#1284
+
+`llama.cpp` is resolved in Kestrel core as a local OpenAI-compatible route, not
+as a first-wave external provider. The plugin package is experimental and is
+not included in the `kestrel-llms` meta-package.
 
 ## Acceptance
 

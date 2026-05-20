@@ -11,20 +11,15 @@ dependencies = [
 deepseek = ["kestrel-llm-deepseek>=0.1.0,<0.2"]
 xai = ["kestrel-llm-xai>=0.1.0,<0.2"]
 kimi = ["kestrel-llm-kimi>=0.1.0,<0.2"]
-llama-cpp = ["kestrel-llm-llama-cpp>=0.1.0,<0.2"]
 cloud = [
     "kestrel-llm-deepseek>=0.1.0,<0.2",
     "kestrel-llm-xai>=0.1.0,<0.2",
     "kestrel-llm-kimi>=0.1.0,<0.2",
 ]
-local = [
-    "kestrel-llm-llama-cpp>=0.1.0,<0.2",
-]
 all = [
     "kestrel-llm-deepseek>=0.1.0,<0.2",
     "kestrel-llm-xai>=0.1.0,<0.2",
     "kestrel-llm-kimi>=0.1.0,<0.2",
-    "kestrel-llm-llama-cpp>=0.1.0,<0.2",
 ]
 
 [build-system]

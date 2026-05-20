@@ -1230,7 +1230,6 @@ dependencies = [
 all = [
     { name = "kestrel-llm-deepseek" },
     { name = "kestrel-llm-kimi" },
-    { name = "kestrel-llm-llama-cpp" },
     { name = "kestrel-llm-xai" },
 ]
 cloud = [
@@ -1244,12 +1243,6 @@ deepseek = [
 kimi = [
     { name = "kestrel-llm-kimi" },
 ]
-llama-cpp = [
-    { name = "kestrel-llm-llama-cpp" },
-]
-local = [
-    { name = "kestrel-llm-llama-cpp" },
-]
 xai = [
     { name = "kestrel-llm-xai" },
 ]
@@ -1262,15 +1255,12 @@ requires-dist = [
     { name = "kestrel-llm-kimi", marker = "extra == 'all'", editable = "providers/kestrel-llm-kimi" },
     { name = "kestrel-llm-kimi", marker = "extra == 'cloud'", editable = "providers/kestrel-llm-kimi" },
     { name = "kestrel-llm-kimi", marker = "extra == 'kimi'", editable = "providers/kestrel-llm-kimi" },
-    { name = "kestrel-llm-llama-cpp", marker = "extra == 'all'", editable = "providers/kestrel-llm-llama-cpp" },
-    { name = "kestrel-llm-llama-cpp", marker = "extra == 'llama-cpp'", editable = "providers/kestrel-llm-llama-cpp" },
-    { name = "kestrel-llm-llama-cpp", marker = "extra == 'local'", editable = "providers/kestrel-llm-llama-cpp" },
     { name = "kestrel-llm-xai", marker = "extra == 'all'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-llm-xai", marker = "extra == 'cloud'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-llm-xai", marker = "extra == 'xai'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-sovereign-sdk", specifier = ">=0.14,<1" },
 ]
-provides-extras = ["deepseek", "xai", "kimi", "llama-cpp", "cloud", "local", "all"]
+provides-extras = ["deepseek", "xai", "kimi", "cloud", "all"]
 
 [[package]]
 name = "kestrel-llms-workspace"
