@@ -53,6 +53,30 @@ From the Kestrel checkout:
 scripts/llm_provider_packages.sh verify
 ```
 
+## Publishing
+
+Create a PyPI Pending Trusted Publisher for each package before its first
+release:
+
+```text
+Owner: KestrelSovereignAI
+Repository: kestrel-llms
+Workflow: publish.yml
+Environment: pypi
+```
+
+Then run the `Publish to PyPI` workflow manually for one package at a time.
+Publish dependency packages first:
+
+```text
+kestrel-llm-openai-compat
+kestrel-llm-deepseek
+kestrel-llm-xai
+kestrel-llm-kimi
+kestrel-llm-llama-cpp
+kestrel-llms
+```
+
 Before merging a PR:
 
 ```bash
