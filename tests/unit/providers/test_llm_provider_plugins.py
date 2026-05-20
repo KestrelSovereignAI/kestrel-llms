@@ -352,8 +352,8 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
     project = pyproject["project"]
 
     assert project["name"] == package
-    assert "kestrel-sovereign-sdk>=0.14,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat==0.1.2" in project["dependencies"]
+    assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
+    assert "kestrel-llm-openai-compat==0.1.3" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]
@@ -365,13 +365,13 @@ def test_meta_package_extras_track_first_wave_packages():
     extras = pyproject["project"]["optional-dependencies"]
 
     assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
-    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.0,<0.2"]
-    assert extras["xai"] == ["kestrel-llm-xai>=0.1.0,<0.2"]
-    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.0,<0.2"]
+    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.3,<0.2"]
+    assert extras["xai"] == ["kestrel-llm-xai>=0.1.3,<0.2"]
+    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.3,<0.2"]
     assert set(extras["cloud"]) == {
-        "kestrel-llm-deepseek>=0.1.0,<0.2",
-        "kestrel-llm-xai>=0.1.0,<0.2",
-        "kestrel-llm-kimi>=0.1.0,<0.2",
+        "kestrel-llm-deepseek>=0.1.3,<0.2",
+        "kestrel-llm-xai>=0.1.3,<0.2",
+        "kestrel-llm-kimi>=0.1.3,<0.2",
     }
     assert set(extras["all"]) == set(extras["cloud"])
 
@@ -381,5 +381,5 @@ def test_shared_openai_compat_package_has_no_entry_point():
     project = pyproject["project"]
 
     assert project["name"] == "kestrel-llm-openai-compat"
-    assert "kestrel-sovereign-sdk>=0.14,<1" in project["dependencies"]
+    assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
     assert "entry-points" not in pyproject["project"]
