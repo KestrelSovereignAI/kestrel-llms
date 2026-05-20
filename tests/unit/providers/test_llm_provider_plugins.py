@@ -3,9 +3,11 @@ from __future__ import annotations
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from kestrel_sdk.llm import LLMResponse, ToolCallStarted
 
 ROOT = Path(__file__).resolve().parents[3]
 for src in [
@@ -83,6 +85,95 @@ def test_kimi_accepts_kimi_api_key_alias(monkeypatch):
     assert async_openai.call_args.kwargs["api_key"] == "sk-kimi"
 
 
+class _AsyncStream:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+
+def _chunk(delta=None, usage=None):
+    choices = [] if delta is None else [SimpleNamespace(delta=delta)]
+    return SimpleNamespace(choices=choices, usage=usage)
+
+
+def _tool_delta(index, id=None, name=None, arguments=None):
+    return SimpleNamespace(
+        index=index,
+        id=id,
+        function=SimpleNamespace(name=name, arguments=arguments),
+    )
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name"),
+    [
+        ("kestrel_llm_deepseek", "DeepSeekAdapter"),
+        ("kestrel_llm_xai", "XAIAdapter"),
+        ("kestrel_llm_kimi", "KimiAdapter"),
+    ],
+)
+async def test_openai_compatible_plugins_stream_with_tools(module_name, class_name):
+    module = __import__(module_name)
+    adapter = getattr(module, class_name)()
+
+    chunks = [
+        _chunk(SimpleNamespace(content="I'll check. ", tool_calls=None)),
+        _chunk(
+            SimpleNamespace(
+                content=None,
+                tool_calls=[_tool_delta(0, id="call_1", name="lookup", arguments='{"q"')],
+            )
+        ),
+        _chunk(
+            SimpleNamespace(
+                content=None,
+                tool_calls=[_tool_delta(0, arguments=':"kestrel"}')],
+            )
+        ),
+        _chunk(None, usage=SimpleNamespace(prompt_tokens=5, completion_tokens=7, total_tokens=12)),
+    ]
+
+    async def create(**kwargs):
+        assert kwargs["stream"] is True
+        assert kwargs["tools"] == [{"type": "function", "function": {"name": "lookup"}}]
+        assert kwargs["tool_choice"] == "auto"
+        return _AsyncStream(chunks)
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    items = [
+        item
+        async for item in adapter.get_streaming_response_with_tools(
+            client,
+            "model",
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "lookup"}}],
+            max_tokens=20,
+        )
+    ]
+
+    assert items[0] == "I'll check. "
+    assert items[1] == ToolCallStarted(index=0, id="call_1", name="lookup")
+    final = items[-1]
+    assert isinstance(final, LLMResponse)
+    assert final.content == "I'll check. "
+    assert final.input_tokens == 5
+    assert final.output_tokens == 7
+    assert final.total_tokens == 12
+    assert final.tool_calls[0].id == "call_1"
+    assert final.tool_calls[0].name == "lookup"
+    assert final.tool_calls[0].arguments == {"q": "kestrel"}
+
+
 def test_registry_discovers_first_wave_plugins(monkeypatch):
     import kestrel_llm_deepseek
     import kestrel_llm_kimi
@@ -150,7 +241,7 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
 
     assert project["name"] == package
     assert "kestrel-sovereign-sdk>=0.14,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat==0.1.0" in project["dependencies"]
+    assert "kestrel-llm-openai-compat==0.1.1" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]

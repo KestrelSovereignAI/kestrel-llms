@@ -11,9 +11,17 @@ from pydantic import BaseModel
 from kestrel_llm_openai_compat import (
     REASONING_COMPLETION_KWARGS,
     completion_kwargs,
+    stream_with_tool_calls,
     to_llm_response,
 )
-from kestrel_sdk.llm import LLMAdapter, LLMResponse, ModelCategory, ModelInfo, ProviderInfo
+from kestrel_sdk.llm import (
+    LLMAdapter,
+    LLMResponse,
+    ModelCategory,
+    ModelInfo,
+    ProviderInfo,
+    ToolCallStarted,
+)
 
 
 class XAIAdapter(LLMAdapter):
@@ -104,6 +112,26 @@ class XAIAdapter(LLMAdapter):
             content = getattr(chunk.choices[0].delta, "content", None)
             if content:
                 yield content
+
+    async def get_streaming_response_with_tools(
+        self,
+        client: openai.AsyncOpenAI,
+        model: str,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        response_format: Optional[Type[BaseModel]] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[str | ToolCallStarted | LLMResponse]:
+        async for item in stream_with_tool_calls(
+            client,
+            model,
+            messages,
+            tools,
+            response_format,
+            passthrough_keys=REASONING_COMPLETION_KWARGS,
+            **kwargs,
+        ):
+            yield item
 
     async def list_models(self, client: openai.AsyncOpenAI) -> List[ModelInfo]:
         models = await client.models.list()

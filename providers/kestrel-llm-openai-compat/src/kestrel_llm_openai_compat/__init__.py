@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, List, Optional, Type
+from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Type, Union
 
 from pydantic import BaseModel
 
-from kestrel_sdk.llm import LLMResponse, ToolCall
+from kestrel_sdk.llm import LLMResponse, ToolCall, ToolCallStarted
 
 STANDARD_COMPLETION_KWARGS = (
     "temperature",
@@ -78,3 +78,108 @@ def to_llm_response(response: Any) -> LLMResponse:
         total_tokens=getattr(usage, "total_tokens", None),
     )
 
+
+async def stream_with_tool_calls(
+    client: Any,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    response_format: Optional[Type[BaseModel]] = None,
+    passthrough_keys: Iterable[str] = STANDARD_COMPLETION_KWARGS,
+    **kwargs: Any,
+) -> AsyncIterator[Union[str, ToolCallStarted, LLMResponse]]:
+    """Stream text and OpenAI-compatible tool calls.
+
+    Kestrel's streaming honesty layer requires a ``ToolCallStarted`` marker
+    as soon as a provider begins a tool call. OpenAI-compatible backends expose
+    tool calls as indexed deltas, so this helper accumulates each index and
+    emits exactly one marker for each call before yielding the final assembled
+    ``LLMResponse``.
+    """
+    extra = completion_kwargs(
+        None,
+        tools,
+        response_format,
+        kwargs,
+        passthrough_keys=passthrough_keys,
+    )
+    extra["stream_options"] = {"include_usage": True}
+
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=True,
+        **extra,
+    )
+
+    tool_calls: Dict[int, Dict[str, str]] = {}
+    text_content = ""
+    input_tokens = None
+    output_tokens = None
+    total_tokens = None
+
+    async for chunk in stream:
+        usage = getattr(chunk, "usage", None)
+        if usage:
+            input_tokens = getattr(usage, "prompt_tokens", None)
+            output_tokens = getattr(usage, "completion_tokens", None)
+            total_tokens = getattr(usage, "total_tokens", None)
+
+        if not getattr(chunk, "choices", None):
+            continue
+
+        delta = chunk.choices[0].delta
+        content = getattr(delta, "content", None)
+        if isinstance(content, str) and content:
+            text_content += content
+            yield content
+
+        for tc_delta in getattr(delta, "tool_calls", None) or []:
+            idx = tc_delta.index
+            is_new = idx not in tool_calls
+            if is_new:
+                tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
+
+            current = tool_calls[idx]
+            if getattr(tc_delta, "id", None):
+                current["id"] += tc_delta.id
+
+            function = getattr(tc_delta, "function", None)
+            if function:
+                if getattr(function, "name", None):
+                    current["name"] += function.name
+                if getattr(function, "arguments", None):
+                    current["arguments"] += function.arguments
+
+            if is_new:
+                yield ToolCallStarted(
+                    index=idx,
+                    id=current["id"] or None,
+                    name=current["name"] or None,
+                )
+
+    if tool_calls:
+        parsed_tool_calls = []
+        for idx in sorted(tool_calls):
+            tc_data = tool_calls[idx]
+            try:
+                args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
+            except json.JSONDecodeError:
+                args = {"_raw": tc_data["arguments"]}
+
+            parsed_tool_calls.append(
+                ToolCall(
+                    id=tc_data["id"],
+                    name=tc_data["name"],
+                    arguments=args,
+                )
+            )
+
+        yield LLMResponse(
+            content=text_content or None,
+            tool_calls=parsed_tool_calls,
+            raw=None,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
