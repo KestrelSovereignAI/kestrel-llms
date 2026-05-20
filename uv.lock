@@ -1128,7 +1128,7 @@ wheels = [
 
 [[package]]
 name = "kestrel-llm-deepseek"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "providers/kestrel-llm-deepseek" }
 dependencies = [
     { name = "kestrel-llm-openai-compat" },
@@ -1147,7 +1147,7 @@ requires-dist = [
 
 [[package]]
 name = "kestrel-llm-kimi"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "providers/kestrel-llm-kimi" }
 dependencies = [
     { name = "kestrel-llm-openai-compat" },
@@ -1166,7 +1166,7 @@ requires-dist = [
 
 [[package]]
 name = "kestrel-llm-openai-compat"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "providers/kestrel-llm-openai-compat" }
 dependencies = [
     { name = "kestrel-sovereign-sdk" },
@@ -1181,7 +1181,7 @@ requires-dist = [
 
 [[package]]
 name = "kestrel-llm-xai"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "providers/kestrel-llm-xai" }
 dependencies = [
     { name = "kestrel-llm-openai-compat" },

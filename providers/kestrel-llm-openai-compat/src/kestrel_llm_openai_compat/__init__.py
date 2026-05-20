@@ -19,6 +19,37 @@ STANDARD_COMPLETION_KWARGS = (
 REASONING_COMPLETION_KWARGS = (*STANDARD_COMPLETION_KWARGS, "reasoning_effort")
 
 
+def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Normalize Chat Completions messages without mutating the caller.
+
+    Kestrel exposes tool-call arguments to downstream code as parsed dicts.
+    OpenAI-compatible APIs require assistant ``tool_calls`` history to carry
+    ``function.arguments`` as a JSON string on the wire.
+    """
+    normalized = []
+    for msg in messages:
+        if "tool_calls" not in msg or not msg["tool_calls"]:
+            normalized.append(msg)
+            continue
+
+        new_msg = {**msg}
+        new_tool_calls = []
+        for tool_call in msg["tool_calls"]:
+            new_tool_call = {**tool_call}
+            function = tool_call.get("function")
+            if isinstance(function, dict) and "arguments" in function:
+                arguments = function["arguments"]
+                if isinstance(arguments, dict):
+                    new_tool_call["function"] = {
+                        **function,
+                        "arguments": json.dumps(arguments),
+                    }
+            new_tool_calls.append(new_tool_call)
+        new_msg["tool_calls"] = new_tool_calls
+        normalized.append(new_msg)
+    return normalized
+
+
 def completion_kwargs(
     format: Optional[str],
     tools: Optional[List[Dict[str, Any]]],
@@ -107,7 +138,7 @@ async def stream_with_tool_calls(
 
     stream = await client.chat.completions.create(
         model=model,
-        messages=messages,
+        messages=normalize_messages(messages),
         stream=True,
         **extra,
     )

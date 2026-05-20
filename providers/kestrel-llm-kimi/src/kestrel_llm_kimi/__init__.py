@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from kestrel_llm_openai_compat import (
     REASONING_COMPLETION_KWARGS,
     completion_kwargs,
+    normalize_messages,
     stream_with_tool_calls,
     to_llm_response,
 )
@@ -85,7 +86,11 @@ class KimiAdapter(LLMAdapter):
             kwargs,
             passthrough_keys=REASONING_COMPLETION_KWARGS,
         )
-        response = await client.chat.completions.create(model=model, messages=messages, **extra)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=normalize_messages(messages),
+            **extra,
+        )
         return to_llm_response(response)
 
     async def get_streaming_response(
@@ -106,7 +111,7 @@ class KimiAdapter(LLMAdapter):
         )
         stream = await client.chat.completions.create(
             model=model,
-            messages=messages,
+            messages=normalize_messages(messages),
             stream=True,
             **extra,
         )

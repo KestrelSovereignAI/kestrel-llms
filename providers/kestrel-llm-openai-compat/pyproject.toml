@@ -1,6 +1,6 @@
 [project]
 name = "kestrel-llm-openai-compat"
-version = "0.1.1"
+version = "0.1.2"
 description = "Shared OpenAI-compatible helpers for Kestrel LLM provider plugins."
 requires-python = ">=3.11"
 dependencies = [
@@ -11,4 +11,3 @@ dependencies = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-

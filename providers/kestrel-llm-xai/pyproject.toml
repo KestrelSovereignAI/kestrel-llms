@@ -1,10 +1,10 @@
 [project]
 name = "kestrel-llm-xai"
-version = "0.1.1"
+version = "0.1.2"
 description = "xAI Grok LLM provider plugin for Kestrel Sovereign."
 requires-python = ">=3.11"
 dependencies = [
-    "kestrel-llm-openai-compat==0.1.1",
+    "kestrel-llm-openai-compat==0.1.2",
     "kestrel-sovereign-sdk>=0.14,<1",
     "openai>=1.0",
     "pydantic>=2",

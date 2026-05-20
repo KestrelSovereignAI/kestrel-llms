@@ -22,6 +22,7 @@ from kestrel_sovereign.llm.provider_registry import (  # noqa: E402
     LLM_PROVIDER_ENTRY_POINT_GROUP,
     ProviderRegistry,
 )
+from kestrel_llm_openai_compat import normalize_messages  # noqa: E402
 
 
 def _entry_point(name: str, cls):
@@ -111,6 +112,37 @@ def _tool_delta(index, id=None, name=None, arguments=None):
     )
 
 
+def test_normalize_messages_json_encodes_tool_call_arguments_without_mutating():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"q": "kestrel", "limit": 2},
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+    ]
+
+    normalized = normalize_messages(messages)
+
+    arguments = normalized[1]["tool_calls"][0]["function"]["arguments"]
+    assert isinstance(arguments, str)
+    assert arguments == '{"q": "kestrel", "limit": 2}'
+    assert messages[1]["tool_calls"][0]["function"]["arguments"] == {
+        "q": "kestrel",
+        "limit": 2,
+    }
+
+
 @pytest.mark.parametrize(
     ("module_name", "class_name"),
     [
@@ -122,6 +154,7 @@ def _tool_delta(index, id=None, name=None, arguments=None):
 async def test_openai_compatible_plugins_stream_with_tools(module_name, class_name):
     module = __import__(module_name)
     adapter = getattr(module, class_name)()
+    captured_kwargs = {}
 
     chunks = [
         _chunk(SimpleNamespace(content="I'll check. ", tool_calls=None)),
@@ -141,6 +174,7 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
     ]
 
     async def create(**kwargs):
+        captured_kwargs.update(kwargs)
         assert kwargs["stream"] is True
         assert kwargs["tools"] == [{"type": "function", "function": {"name": "lookup"}}]
         assert kwargs["tool_choice"] == "auto"
@@ -155,7 +189,24 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
         async for item in adapter.get_streaming_response_with_tools(
             client,
             "model",
-            [{"role": "user", "content": "hi"}],
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_previous",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup",
+                                "arguments": {"q": "previous"},
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_previous", "content": "ok"},
+                {"role": "user", "content": "hi"},
+            ],
             tools=[{"type": "function", "function": {"name": "lookup"}}],
             max_tokens=20,
         )
@@ -172,6 +223,67 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
     assert final.tool_calls[0].id == "call_1"
     assert final.tool_calls[0].name == "lookup"
     assert final.tool_calls[0].arguments == {"q": "kestrel"}
+    sent_arguments = captured_kwargs["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert sent_arguments == '{"q": "previous"}'
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name"),
+    [
+        ("kestrel_llm_deepseek", "DeepSeekAdapter"),
+        ("kestrel_llm_xai", "XAIAdapter"),
+        ("kestrel_llm_kimi", "KimiAdapter"),
+    ],
+)
+async def test_openai_compatible_plugins_get_response_normalizes_tool_history(
+    module_name,
+    class_name,
+):
+    module = __import__(module_name)
+    adapter = getattr(module, class_name)()
+    captured_kwargs = {}
+
+    async def create(**kwargs):
+        captured_kwargs.update(kwargs)
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="done", tool_calls=None)
+                )
+            ],
+            usage=SimpleNamespace(prompt_tokens=3, completion_tokens=4, total_tokens=7),
+        )
+
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create))
+    )
+
+    response = await adapter.get_response(
+        client,
+        "model",
+        [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_previous",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "arguments": {"q": "previous"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_previous", "content": "ok"},
+            {"role": "user", "content": "hi"},
+        ],
+    )
+
+    assert response.content == "done"
+    sent_arguments = captured_kwargs["messages"][0]["tool_calls"][0]["function"]["arguments"]
+    assert sent_arguments == '{"q": "previous"}'
 
 
 def test_registry_discovers_first_wave_plugins(monkeypatch):
@@ -241,7 +353,7 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
 
     assert project["name"] == package
     assert "kestrel-sovereign-sdk>=0.14,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat==0.1.1" in project["dependencies"]
+    assert "kestrel-llm-openai-compat==0.1.2" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]
