@@ -34,6 +34,11 @@ on:
         description: "Git ref to publish"
         required: false
         default: main
+      use_pypi_environment:
+        description: "Use the GitHub pypi environment claim"
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -95,9 +100,10 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  publish:
-    name: Publish selected package
+  publish-with-environment:
+    name: Publish selected package with pypi environment
     needs: build
+    if: inputs.use_pypi_environment
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -114,3 +120,21 @@ jobs:
         with:
           packages-dir: dist/
 
+  publish-without-environment:
+    name: Publish selected package without environment
+    needs: build
+    if: ${{ !inputs.use_pypi_environment }}
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ inputs.package }}
+          path: dist/
+
+      - name: Publish via PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
