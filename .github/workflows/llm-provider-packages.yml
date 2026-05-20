@@ -15,6 +15,19 @@ on:
       - "scripts/llm_provider_packages.sh"
       - ".github/workflows/llm-provider-packages.yml"
   workflow_dispatch:
+    inputs:
+      package:
+        description: "Optional package to publish after verification"
+        required: false
+        type: choice
+        options:
+          - ""
+          - kestrel-llm-openai-compat
+          - kestrel-llm-deepseek
+          - kestrel-llm-xai
+          - kestrel-llm-kimi
+          - kestrel-llm-llama-cpp
+          - kestrel-llms
 
 permissions:
   contents: read
@@ -39,3 +52,53 @@ jobs:
       - name: Verify provider packages
         run: scripts/llm_provider_packages.sh verify
 
+  build:
+    name: Build selected package
+    needs: provider-packages
+    if: github.event_name == 'workflow_dispatch' && inputs.package != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Build selected package
+        run: |
+          rm -rf dist
+          uv build --package "${{ inputs.package }}" --out-dir dist
+
+      - name: Show artifacts
+        run: ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ inputs.package }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish selected package
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.package != ''
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-${{ inputs.package }}
+          path: dist/
+
+      - name: Publish via PyPI trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
