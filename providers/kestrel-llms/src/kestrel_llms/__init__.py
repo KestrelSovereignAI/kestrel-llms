@@ -1,3 +1,3 @@
 """Convenience package for installing Kestrel LLM provider extras."""
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"

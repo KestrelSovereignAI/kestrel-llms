@@ -89,6 +89,12 @@ def completion_kwargs(
 
 
 def to_llm_response(response: Any) -> LLMResponse:
+    """Convert a non-streaming SDK response while preserving the raw object.
+
+    Kestrel core knows how to extract provider ``reasoning_content`` from
+    ``raw.choices[0].message``. Keep the full response here so callers retain
+    provider-specific metadata and usage details.
+    """
     message = response.choices[0].message
     tool_calls = None
     if getattr(message, "tool_calls", None):
@@ -198,6 +204,10 @@ async def stream_with_tool_calls(
                     name=current["name"] or None,
                 )
 
+    # This helper's terminal LLMResponse is the tool-call handoff contract used
+    # by Kestrel's orchestrator. Text-only streams are delivered as text chunks;
+    # provider reasoning only needs replay when an assistant tool-call message
+    # will be sent back with tool results.
     if tool_calls:
         parsed_tool_calls = []
         for idx in sorted(tool_calls):
