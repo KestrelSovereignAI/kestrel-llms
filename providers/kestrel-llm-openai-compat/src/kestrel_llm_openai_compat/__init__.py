@@ -149,6 +149,7 @@ async def stream_with_tool_calls(
 
     tool_calls: Dict[int, Dict[str, str]] = {}
     text_content = ""
+    reasoning_content = ""
     input_tokens = None
     output_tokens = None
     total_tokens = None
@@ -164,6 +165,10 @@ async def stream_with_tool_calls(
             continue
 
         delta = chunk.choices[0].delta
+        delta_reasoning = getattr(delta, "reasoning_content", None)
+        if isinstance(delta_reasoning, str) and delta_reasoning:
+            reasoning_content += delta_reasoning
+
         content = getattr(delta, "content", None)
         if isinstance(content, str) and content:
             text_content += content
@@ -213,7 +218,7 @@ async def stream_with_tool_calls(
         yield LLMResponse(
             content=text_content or None,
             tool_calls=parsed_tool_calls,
-            raw=None,
+            raw={"reasoning_content": reasoning_content} if reasoning_content else None,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
