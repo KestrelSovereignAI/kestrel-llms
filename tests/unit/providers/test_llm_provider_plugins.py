@@ -185,6 +185,7 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
 
     chunks = [
         _chunk(SimpleNamespace(content="I'll check. ", tool_calls=None)),
+        _chunk(SimpleNamespace(content=None, reasoning_content="Need lookup.", tool_calls=None)),
         _chunk(
             SimpleNamespace(
                 content=None,
@@ -247,6 +248,7 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
     assert final.input_tokens == 5
     assert final.output_tokens == 7
     assert final.total_tokens == 12
+    assert final.raw == {"reasoning_content": "Need lookup."}
     assert final.tool_calls[0].id == "call_1"
     assert final.tool_calls[0].name == "lookup"
     assert final.tool_calls[0].arguments == {"q": "kestrel"}
@@ -388,7 +390,7 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
 
     assert project["name"] == package
     assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat>=0.1.4,<0.2" in project["dependencies"]
+    assert "kestrel-llm-openai-compat>=0.1.5,<0.2" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]
@@ -400,13 +402,13 @@ def test_meta_package_extras_track_first_wave_packages():
     extras = pyproject["project"]["optional-dependencies"]
 
     assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
-    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.5,<0.2"]
-    assert extras["xai"] == ["kestrel-llm-xai>=0.1.5,<0.2"]
-    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.5,<0.2"]
+    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.6,<0.2"]
+    assert extras["xai"] == ["kestrel-llm-xai>=0.1.6,<0.2"]
+    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.6,<0.2"]
     assert set(extras["cloud"]) == {
-        "kestrel-llm-deepseek>=0.1.5,<0.2",
-        "kestrel-llm-xai>=0.1.5,<0.2",
-        "kestrel-llm-kimi>=0.1.5,<0.2",
+        "kestrel-llm-deepseek>=0.1.6,<0.2",
+        "kestrel-llm-xai>=0.1.6,<0.2",
+        "kestrel-llm-kimi>=0.1.6,<0.2",
     }
     assert set(extras["all"]) == set(extras["cloud"])
 
