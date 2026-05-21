@@ -22,7 +22,7 @@ from kestrel_sovereign.llm.provider_registry import (  # noqa: E402
     LLM_PROVIDER_ENTRY_POINT_GROUP,
     ProviderRegistry,
 )
-from kestrel_llm_openai_compat import normalize_messages  # noqa: E402
+from kestrel_llm_openai_compat import normalize_messages, to_llm_response  # noqa: E402
 from kestrel_llm_kimi import normalize_kimi_messages  # noqa: E402
 
 
@@ -170,6 +170,26 @@ def test_kimi_normalize_messages_adds_reasoning_content_to_tool_call_history():
     assert "reasoning_content" not in messages[1]
 
 
+def test_to_llm_response_preserves_raw_provider_reasoning_object():
+    raw = SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    reasoning_content="Need the tool.",
+                    tool_calls=None,
+                )
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2, total_tokens=3),
+    )
+
+    response = to_llm_response(raw)
+
+    assert response.raw is raw
+    assert response.raw.choices[0].message.reasoning_content == "Need the tool."
+
+
 @pytest.mark.parametrize(
     ("module_name", "class_name"),
     [
@@ -184,6 +204,8 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
     captured_kwargs = {}
 
     chunks = [
+        _chunk(SimpleNamespace(reasoning_content="Need health. ", content=None, tool_calls=None)),
+        _chunk(SimpleNamespace(reasoning_content="Use lookup.", content=None, tool_calls=None)),
         _chunk(SimpleNamespace(content="I'll check. ", tool_calls=None)),
         _chunk(SimpleNamespace(content=None, reasoning_content="Need lookup.", tool_calls=None)),
         _chunk(
@@ -245,10 +267,10 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
     final = items[-1]
     assert isinstance(final, LLMResponse)
     assert final.content == "I'll check. "
+    assert final.raw == {"reasoning_content": "Need health. Use lookup.Need lookup."}
     assert final.input_tokens == 5
     assert final.output_tokens == 7
     assert final.total_tokens == 12
-    assert final.raw == {"reasoning_content": "Need lookup."}
     assert final.tool_calls[0].id == "call_1"
     assert final.tool_calls[0].name == "lookup"
     assert final.tool_calls[0].arguments == {"q": "kestrel"}
@@ -390,7 +412,7 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
 
     assert project["name"] == package
     assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat>=0.1.5,<0.2" in project["dependencies"]
+    assert "kestrel-llm-openai-compat>=0.1.6,<0.2" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]
@@ -402,13 +424,13 @@ def test_meta_package_extras_track_first_wave_packages():
     extras = pyproject["project"]["optional-dependencies"]
 
     assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
-    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.6,<0.2"]
-    assert extras["xai"] == ["kestrel-llm-xai>=0.1.6,<0.2"]
-    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.6,<0.2"]
+    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.7,<0.2"]
+    assert extras["xai"] == ["kestrel-llm-xai>=0.1.7,<0.2"]
+    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.7,<0.2"]
     assert set(extras["cloud"]) == {
-        "kestrel-llm-deepseek>=0.1.6,<0.2",
-        "kestrel-llm-xai>=0.1.6,<0.2",
-        "kestrel-llm-kimi>=0.1.6,<0.2",
+        "kestrel-llm-deepseek>=0.1.7,<0.2",
+        "kestrel-llm-xai>=0.1.7,<0.2",
+        "kestrel-llm-kimi>=0.1.7,<0.2",
     }
     assert set(extras["all"]) == set(extras["cloud"])
 
