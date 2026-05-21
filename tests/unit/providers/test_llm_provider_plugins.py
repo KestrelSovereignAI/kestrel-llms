@@ -400,13 +400,13 @@ def test_meta_package_extras_track_first_wave_packages():
     extras = pyproject["project"]["optional-dependencies"]
 
     assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
-    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.4,<0.2"]
-    assert extras["xai"] == ["kestrel-llm-xai>=0.1.4,<0.2"]
-    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.4,<0.2"]
+    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.5,<0.2"]
+    assert extras["xai"] == ["kestrel-llm-xai>=0.1.5,<0.2"]
+    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.5,<0.2"]
     assert set(extras["cloud"]) == {
-        "kestrel-llm-deepseek>=0.1.4,<0.2",
-        "kestrel-llm-xai>=0.1.4,<0.2",
-        "kestrel-llm-kimi>=0.1.4,<0.2",
+        "kestrel-llm-deepseek>=0.1.5,<0.2",
+        "kestrel-llm-xai>=0.1.5,<0.2",
+        "kestrel-llm-kimi>=0.1.5,<0.2",
     }
     assert set(extras["all"]) == set(extras["cloud"])
 

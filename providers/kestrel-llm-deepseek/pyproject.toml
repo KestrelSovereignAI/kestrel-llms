@@ -1,6 +1,6 @@
 [project]
 name = "kestrel-llm-deepseek"
-version = "0.1.4"
+version = "0.1.5"
 description = "DeepSeek LLM provider plugin for Kestrel Sovereign."
 requires-python = ">=3.11"
 dependencies = [
