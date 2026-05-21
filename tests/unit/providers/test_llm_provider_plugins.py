@@ -23,6 +23,7 @@ from kestrel_sovereign.llm.provider_registry import (  # noqa: E402
     ProviderRegistry,
 )
 from kestrel_llm_openai_compat import normalize_messages  # noqa: E402
+from kestrel_llm_kimi import normalize_kimi_messages  # noqa: E402
 
 
 def _entry_point(name: str, cls):
@@ -143,6 +144,32 @@ def test_normalize_messages_json_encodes_tool_call_arguments_without_mutating():
     }
 
 
+def test_kimi_normalize_messages_adds_reasoning_content_to_tool_call_history():
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"q": "kestrel"},
+                    },
+                }
+            ],
+        },
+    ]
+
+    normalized = normalize_kimi_messages(messages)
+
+    assert normalized[1]["reasoning_content"] == ""
+    assert normalized[1]["tool_calls"][0]["function"]["arguments"] == '{"q": "kestrel"}'
+    assert "reasoning_content" not in messages[1]
+
+
 @pytest.mark.parametrize(
     ("module_name", "class_name"),
     [
@@ -225,6 +252,10 @@ async def test_openai_compatible_plugins_stream_with_tools(module_name, class_na
     assert final.tool_calls[0].arguments == {"q": "kestrel"}
     sent_arguments = captured_kwargs["messages"][0]["tool_calls"][0]["function"]["arguments"]
     assert sent_arguments == '{"q": "previous"}'
+    if module_name == "kestrel_llm_kimi":
+        assert captured_kwargs["messages"][0]["reasoning_content"] == ""
+    else:
+        assert "reasoning_content" not in captured_kwargs["messages"][0]
 
 
 @pytest.mark.parametrize(
@@ -284,6 +315,10 @@ async def test_openai_compatible_plugins_get_response_normalizes_tool_history(
     assert response.content == "done"
     sent_arguments = captured_kwargs["messages"][0]["tool_calls"][0]["function"]["arguments"]
     assert sent_arguments == '{"q": "previous"}'
+    if module_name == "kestrel_llm_kimi":
+        assert captured_kwargs["messages"][0]["reasoning_content"] == ""
+    else:
+        assert "reasoning_content" not in captured_kwargs["messages"][0]
 
 
 def test_registry_discovers_first_wave_plugins(monkeypatch):
@@ -353,7 +388,12 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
 
     assert project["name"] == package
     assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat==0.1.3" in project["dependencies"]
+    compat_dep = (
+        "kestrel-llm-openai-compat==0.1.4"
+        if package == "kestrel-llm-kimi"
+        else "kestrel-llm-openai-compat==0.1.3"
+    )
+    assert compat_dep in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]

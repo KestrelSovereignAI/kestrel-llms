@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Dict, Iterable, List, Optional, Type, Union
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, List, Optional, Type, Union
 
 from pydantic import BaseModel
 
@@ -48,6 +48,9 @@ def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         new_msg["tool_calls"] = new_tool_calls
         normalized.append(new_msg)
     return normalized
+
+
+MessageNormalizer = Callable[[List[Dict[str, Any]]], List[Dict[str, Any]]]
 
 
 def completion_kwargs(
@@ -117,6 +120,7 @@ async def stream_with_tool_calls(
     tools: Optional[List[Dict[str, Any]]] = None,
     response_format: Optional[Type[BaseModel]] = None,
     passthrough_keys: Iterable[str] = STANDARD_COMPLETION_KWARGS,
+    message_normalizer: MessageNormalizer = normalize_messages,
     **kwargs: Any,
 ) -> AsyncIterator[Union[str, ToolCallStarted, LLMResponse]]:
     """Stream text and OpenAI-compatible tool calls.
@@ -138,7 +142,7 @@ async def stream_with_tool_calls(
 
     stream = await client.chat.completions.create(
         model=model,
-        messages=normalize_messages(messages),
+        messages=message_normalizer(messages),
         stream=True,
         **extra,
     )

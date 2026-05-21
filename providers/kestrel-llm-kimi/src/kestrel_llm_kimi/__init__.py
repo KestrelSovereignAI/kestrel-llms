@@ -25,6 +25,18 @@ from kestrel_sdk.llm import (
 )
 
 
+def normalize_kimi_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    normalized = normalize_messages(messages)
+    for msg in normalized:
+        if (
+            msg.get("role") == "assistant"
+            and msg.get("tool_calls")
+            and "reasoning_content" not in msg
+        ):
+            msg["reasoning_content"] = ""
+    return normalized
+
+
 class KimiAdapter(LLMAdapter):
     provider_name = "kimi"
     default_base_url = "https://api.moonshot.ai/v1"
@@ -88,7 +100,7 @@ class KimiAdapter(LLMAdapter):
         )
         response = await client.chat.completions.create(
             model=model,
-            messages=normalize_messages(messages),
+            messages=normalize_kimi_messages(messages),
             **extra,
         )
         return to_llm_response(response)
@@ -111,7 +123,7 @@ class KimiAdapter(LLMAdapter):
         )
         stream = await client.chat.completions.create(
             model=model,
-            messages=normalize_messages(messages),
+            messages=normalize_kimi_messages(messages),
             stream=True,
             **extra,
         )
@@ -136,6 +148,7 @@ class KimiAdapter(LLMAdapter):
             tools,
             response_format,
             passthrough_keys=REASONING_COMPLETION_KWARGS,
+            message_normalizer=normalize_kimi_messages,
             **kwargs,
         ):
             yield item
