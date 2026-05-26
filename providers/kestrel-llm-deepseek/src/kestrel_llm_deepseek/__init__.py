@@ -12,6 +12,7 @@ from kestrel_llm_openai_compat import (
     REASONING_COMPLETION_KWARGS,
     completion_kwargs,
     normalize_messages,
+    openai_compatible_capabilities,
     stream_with_tool_calls,
     to_llm_response,
 )
@@ -20,6 +21,7 @@ from kestrel_sdk.llm import (
     LLMResponse,
     ModelCategory,
     ModelInfo,
+    ProviderCapabilities,
     ProviderInfo,
     ToolCallStarted,
 )
@@ -64,6 +66,17 @@ class DeepSeekAdapter(LLMAdapter):
 
     def deliberation_style(self) -> str:
         return "sequential"
+
+    def provider_capabilities(self) -> ProviderCapabilities:
+        return openai_compatible_capabilities(
+            supports_vision=False,
+            supports_structured_output=True,
+            model_dependent=("structured_output",),
+            notes=(
+                "DeepSeek is OpenAI-compatible but reasoning models require provider reasoning metadata to be replayed across tool turns.",
+                "Vision is not declared for the default DeepSeek route.",
+            ),
+        )
 
     async def get_response(
         self,

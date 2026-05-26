@@ -12,6 +12,7 @@ from kestrel_llm_openai_compat import (
     REASONING_COMPLETION_KWARGS,
     completion_kwargs,
     normalize_messages,
+    openai_compatible_capabilities,
     stream_with_tool_calls,
     to_llm_response,
 )
@@ -20,6 +21,7 @@ from kestrel_sdk.llm import (
     LLMResponse,
     ModelCategory,
     ModelInfo,
+    ProviderCapabilities,
     ProviderInfo,
     ToolCallStarted,
 )
@@ -66,6 +68,16 @@ class XAIAdapter(LLMAdapter):
 
     def deliberation_style(self) -> str:
         return "sequential"
+
+    def provider_capabilities(self) -> ProviderCapabilities:
+        return openai_compatible_capabilities(
+            supports_vision=True,
+            supports_structured_output=True,
+            model_dependent=("vision", "structured_output"),
+            notes=(
+                "xAI uses OpenAI-compatible request shapes; exact feature support is model-dependent.",
+            ),
+        )
 
     async def get_response(
         self,

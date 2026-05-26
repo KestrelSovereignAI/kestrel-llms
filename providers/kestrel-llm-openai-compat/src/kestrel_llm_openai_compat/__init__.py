@@ -3,11 +3,30 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator, Callable, Dict, Iterable, List, Optional, Type, Union
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 from pydantic import BaseModel
 
-from kestrel_sdk.llm import LLMResponse, ToolCall, ToolCallStarted
+from kestrel_sdk.llm import (
+    LLMResponse,
+    ProviderCapabilities,
+    StructuredOutputMode,
+    ToolCall,
+    ToolCallStarted,
+    ToolStreamingMode,
+    VisionInputMode,
+)
 
 STANDARD_COMPLETION_KWARGS = (
     "temperature",
@@ -17,6 +36,35 @@ STANDARD_COMPLETION_KWARGS = (
     "extra_body",
 )
 REASONING_COMPLETION_KWARGS = (*STANDARD_COMPLETION_KWARGS, "reasoning_effort")
+
+
+def openai_compatible_capabilities(
+    *,
+    supports_vision: bool = False,
+    supports_structured_output: bool = True,
+    model_dependent: Sequence[str] = (),
+    notes: Sequence[str] = (),
+) -> ProviderCapabilities:
+    """Return SDK capability metadata for OpenAI-compatible providers.
+
+    Per-model support may still vary by provider/model; use
+    ``model_dependent`` to mark those caveats.
+    """
+    return ProviderCapabilities(
+        supports_tools=True,
+        supports_streaming=True,
+        supports_vision=supports_vision,
+        supports_structured_output=supports_structured_output,
+        structured_output_mode=StructuredOutputMode.JSON_SCHEMA
+        if supports_structured_output
+        else StructuredOutputMode.NONE,
+        tool_streaming_mode=ToolStreamingMode.NATIVE_DELTA,
+        vision_input_mode=VisionInputMode.OPENAI_IMAGE_URL
+        if supports_vision
+        else VisionInputMode.NONE,
+        model_dependent=tuple(model_dependent),
+        notes=tuple(notes),
+    )
 
 
 def normalize_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

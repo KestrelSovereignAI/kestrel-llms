@@ -7,7 +7,14 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from kestrel_sdk.llm import LLMResponse, ToolCallStarted
+from kestrel_sdk.llm import (
+    LLMResponse,
+    ProviderCapabilities,
+    StructuredOutputMode,
+    ToolCallStarted,
+    ToolStreamingMode,
+    VisionInputMode,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 for src in [
@@ -22,7 +29,11 @@ from kestrel_sovereign.llm.provider_registry import (  # noqa: E402
     LLM_PROVIDER_ENTRY_POINT_GROUP,
     ProviderRegistry,
 )
-from kestrel_llm_openai_compat import normalize_messages, to_llm_response  # noqa: E402
+from kestrel_llm_openai_compat import (  # noqa: E402
+    normalize_messages,
+    openai_compatible_capabilities,
+    to_llm_response,
+)
 from kestrel_llm_kimi import normalize_kimi_messages  # noqa: E402
 
 
@@ -188,6 +199,69 @@ def test_to_llm_response_preserves_raw_provider_reasoning_object():
 
     assert response.raw is raw
     assert response.raw.choices[0].message.reasoning_content == "Need the tool."
+
+
+def test_openai_compatible_capabilities_return_sdk_contract():
+    capabilities = openai_compatible_capabilities(
+        supports_vision=True,
+        model_dependent=("vision",),
+        notes=("example",),
+    )
+
+    assert capabilities == ProviderCapabilities(
+        supports_tools=True,
+        supports_streaming=True,
+        supports_vision=True,
+        supports_structured_output=True,
+        structured_output_mode=StructuredOutputMode.JSON_SCHEMA,
+        tool_streaming_mode=ToolStreamingMode.NATIVE_DELTA,
+        vision_input_mode=VisionInputMode.OPENAI_IMAGE_URL,
+        model_dependent=("vision",),
+        notes=("example",),
+    )
+
+
+def test_openai_compatible_capabilities_can_disable_feature_modes():
+    capabilities = openai_compatible_capabilities(
+        supports_structured_output=False,
+    )
+
+    assert capabilities.supports_vision is False
+    assert capabilities.supports_structured_output is False
+    assert capabilities.structured_output_mode == StructuredOutputMode.NONE
+    assert capabilities.vision_input_mode == VisionInputMode.NONE
+
+
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "supports_vision", "model_dependent"),
+    [
+        ("kestrel_llm_deepseek", "DeepSeekAdapter", False, {"structured_output"}),
+        ("kestrel_llm_xai", "XAIAdapter", True, {"vision", "structured_output"}),
+        ("kestrel_llm_kimi", "KimiAdapter", False, {"structured_output"}),
+    ],
+)
+def test_provider_plugins_declare_capabilities(
+    module_name,
+    class_name,
+    supports_vision,
+    model_dependent,
+):
+    module = __import__(module_name)
+    adapter = getattr(module, class_name)()
+
+    capabilities = adapter.provider_capabilities()
+
+    assert capabilities.supports_tools is True
+    assert capabilities.supports_streaming is True
+    assert capabilities.supports_vision is supports_vision
+    assert capabilities.supports_structured_output is True
+    assert capabilities.structured_output_mode == StructuredOutputMode.JSON_SCHEMA
+    assert capabilities.tool_streaming_mode == ToolStreamingMode.NATIVE_DELTA
+    assert capabilities.vision_input_mode == (
+        VisionInputMode.OPENAI_IMAGE_URL if supports_vision else VisionInputMode.NONE
+    )
+    assert set(capabilities.model_dependent) == model_dependent
+    assert capabilities.notes
 
 
 @pytest.mark.parametrize(
@@ -411,8 +485,8 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
     project = pyproject["project"]
 
     assert project["name"] == package
-    assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat>=0.1.6,<0.2" in project["dependencies"]
+    assert "kestrel-sovereign-sdk>=0.17.0,<1" in project["dependencies"]
+    assert "kestrel-llm-openai-compat>=0.1.7,<0.2" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]
@@ -424,13 +498,13 @@ def test_meta_package_extras_track_first_wave_packages():
     extras = pyproject["project"]["optional-dependencies"]
 
     assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
-    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.7,<0.2"]
-    assert extras["xai"] == ["kestrel-llm-xai>=0.1.7,<0.2"]
-    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.7,<0.2"]
+    assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.8,<0.2"]
+    assert extras["xai"] == ["kestrel-llm-xai>=0.1.8,<0.2"]
+    assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.8,<0.2"]
     assert set(extras["cloud"]) == {
-        "kestrel-llm-deepseek>=0.1.7,<0.2",
-        "kestrel-llm-xai>=0.1.7,<0.2",
-        "kestrel-llm-kimi>=0.1.7,<0.2",
+        "kestrel-llm-deepseek>=0.1.8,<0.2",
+        "kestrel-llm-xai>=0.1.8,<0.2",
+        "kestrel-llm-kimi>=0.1.8,<0.2",
     }
     assert set(extras["all"]) == set(extras["cloud"])
 
@@ -440,5 +514,5 @@ def test_shared_openai_compat_package_has_no_entry_point():
     project = pyproject["project"]
 
     assert project["name"] == "kestrel-llm-openai-compat"
-    assert "kestrel-sovereign-sdk>=0.14.1,<1" in project["dependencies"]
+    assert "kestrel-sovereign-sdk>=0.17.0,<1" in project["dependencies"]
     assert "entry-points" not in pyproject["project"]

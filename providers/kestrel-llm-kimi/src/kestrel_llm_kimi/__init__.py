@@ -12,6 +12,7 @@ from kestrel_llm_openai_compat import (
     REASONING_COMPLETION_KWARGS,
     completion_kwargs,
     normalize_messages,
+    openai_compatible_capabilities,
     stream_with_tool_calls,
     to_llm_response,
 )
@@ -20,6 +21,7 @@ from kestrel_sdk.llm import (
     LLMResponse,
     ModelCategory,
     ModelInfo,
+    ProviderCapabilities,
     ProviderInfo,
     ToolCallStarted,
 )
@@ -80,6 +82,17 @@ class KimiAdapter(LLMAdapter):
 
     def deliberation_style(self) -> str:
         return "sequential"
+
+    def provider_capabilities(self) -> ProviderCapabilities:
+        return openai_compatible_capabilities(
+            supports_vision=False,
+            supports_structured_output=True,
+            model_dependent=("structured_output",),
+            notes=(
+                "Kimi is OpenAI-compatible but requires reasoning_content in assistant tool-call history when thinking is enabled.",
+                "Vision is not declared for the default Moonshot route.",
+            ),
+        )
 
     async def get_response(
         self,

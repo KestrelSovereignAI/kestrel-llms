@@ -1381,7 +1381,7 @@ wheels = [
 
 [[package]]
 name = "kestrel-llm-deepseek"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "providers/kestrel-llm-deepseek" }
 dependencies = [
     { name = "kestrel-llm-openai-compat" },
@@ -1393,14 +1393,14 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
-    { name = "kestrel-sovereign-sdk", specifier = ">=0.14.1,<1" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
 [[package]]
 name = "kestrel-llm-kimi"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "providers/kestrel-llm-kimi" }
 dependencies = [
     { name = "kestrel-llm-openai-compat" },
@@ -1412,14 +1412,14 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
-    { name = "kestrel-sovereign-sdk", specifier = ">=0.14.1,<1" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
 [[package]]
 name = "kestrel-llm-openai-compat"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "providers/kestrel-llm-openai-compat" }
 dependencies = [
     { name = "kestrel-sovereign-sdk" },
@@ -1428,13 +1428,13 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "kestrel-sovereign-sdk", specifier = ">=0.14.1,<1" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
 [[package]]
 name = "kestrel-llm-xai"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "providers/kestrel-llm-xai" }
 dependencies = [
     { name = "kestrel-llm-openai-compat" },
@@ -1446,14 +1446,14 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "kestrel-llm-openai-compat", editable = "providers/kestrel-llm-openai-compat" },
-    { name = "kestrel-sovereign-sdk", specifier = ">=0.14.1,<1" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
     { name = "openai", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2" },
 ]
 
 [[package]]
 name = "kestrel-llms"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "providers/kestrel-llms" }
 dependencies = [
     { name = "kestrel-sovereign-sdk" },
@@ -1491,7 +1491,7 @@ requires-dist = [
     { name = "kestrel-llm-xai", marker = "extra == 'all'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-llm-xai", marker = "extra == 'cloud'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-llm-xai", marker = "extra == 'xai'", editable = "providers/kestrel-llm-xai" },
-    { name = "kestrel-sovereign-sdk", specifier = ">=0.14.1,<1" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
 ]
 provides-extras = ["deepseek", "xai", "kimi", "cloud", "all"]
 
@@ -1515,7 +1515,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "kestrel-sovereign", specifier = ">=0.13.1" },
-    { name = "kestrel-sovereign-sdk", specifier = ">=0.14.1,<1" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
     { name = "openai", specifier = "==1.93.2" },
     { name = "pydantic", specifier = ">=2" },
 ]
@@ -1590,14 +1590,14 @@ wheels = [
 
 [[package]]
 name = "kestrel-sovereign-sdk"
-version = "0.14.1"
+version = "0.17.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/25/f2/5b90ce925c154925f46865d17ab345fdaf66d176ffb14c53f374fdf6c7c3/kestrel_sovereign_sdk-0.14.1.tar.gz", hash = "sha256:672178a5ad7dfd1bacb6a87555fbf481934df1c63d0837cb4d418f0ea75c0e35", size = 88036, upload-time = "2026-05-20T16:31:43.885Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a7/32/efce633e4c565a92a300798c2ebf9c69fe7397bc78df965984de25b6c586/kestrel_sovereign_sdk-0.17.0.tar.gz", hash = "sha256:f4905999a3c025ddb2ce60bbb2cb4dc37c22fae30d424595c3be8696a95fd9f3", size = 93013, upload-time = "2026-05-26T16:52:22.172Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1f/22/9341fd05f3e8e59a550ea162672780275e550a5b988fbca8c6783d7f706c/kestrel_sovereign_sdk-0.14.1-py3-none-any.whl", hash = "sha256:dd6cebc5b8825651e493ab9a3ae85734131e184f9e865df9e648e5b8b35c6355", size = 111572, upload-time = "2026-05-20T16:31:42.336Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/ec/919ef7a7b43506eae13fdfc61d45f9039a5034d7936de0b3e8f5b4d63999/kestrel_sovereign_sdk-0.17.0-py3-none-any.whl", hash = "sha256:cb3fca6426346a1c1ccec0b4de4e8e7ede680a0e32f3279eec3268284deb6260", size = 118463, upload-time = "2026-05-26T16:52:20.927Z" },
 ]
 
 [[package]]
