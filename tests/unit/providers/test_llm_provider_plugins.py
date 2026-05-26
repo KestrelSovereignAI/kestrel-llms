@@ -7,10 +7,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel
 from kestrel_sdk.llm import (
     LLMResponse,
+    ModelCategory,
     ProviderCapabilities,
     StructuredOutputMode,
+    ToolCall,
     ToolCallStarted,
     ToolStreamingMode,
     VisionInputMode,
@@ -21,6 +24,7 @@ for src in [
     ROOT / "providers/kestrel-llm-deepseek/src",
     ROOT / "providers/kestrel-llm-xai/src",
     ROOT / "providers/kestrel-llm-kimi/src",
+    ROOT / "providers/kestrel-llm-vertex/src",
     ROOT / "providers/kestrel-llm-openai-compat/src",
 ]:
     sys.path.insert(0, str(src))
@@ -35,6 +39,7 @@ from kestrel_llm_openai_compat import (  # noqa: E402
     to_llm_response,
 )
 from kestrel_llm_kimi import normalize_kimi_messages  # noqa: E402
+from kestrel_llm_vertex import normalize_vertex_messages  # noqa: E402
 
 
 def _entry_point(name: str, cls):
@@ -96,6 +101,61 @@ def test_kimi_accepts_kimi_api_key_alias(monkeypatch):
         kestrel_llm_kimi.KimiAdapter.create_provider({})
 
     assert async_openai.call_args.kwargs["api_key"] == "sk-kimi"
+
+
+def test_vertex_factory_uses_api_key_mode(monkeypatch):
+    import kestrel_llm_vertex
+
+    fake_client = MagicMock()
+    fake_genai = SimpleNamespace(Client=MagicMock(return_value=fake_client))
+    monkeypatch.setattr(kestrel_llm_vertex, "_load_genai", lambda: fake_genai)
+    monkeypatch.setenv("GOOGLE_API_KEY", "sk-google")
+
+    info = kestrel_llm_vertex.VertexAIAdapter.create_provider({})
+
+    fake_genai.Client.assert_called_once_with(api_key="sk-google")
+    assert info.name == "vertex_ai:api"
+    assert info.vendor == "vertex_ai"
+    assert info.route == "api"
+    assert info.client is fake_client
+    assert info.model == "gemini-2.5-flash"
+    assert info.is_cloud is True
+    assert info.is_local is False
+
+
+def test_vertex_factory_accepts_gemini_api_key_alias(monkeypatch):
+    import kestrel_llm_vertex
+
+    fake_client = MagicMock()
+    fake_genai = SimpleNamespace(Client=MagicMock(return_value=fake_client))
+    monkeypatch.setattr(kestrel_llm_vertex, "_load_genai", lambda: fake_genai)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "sk-gemini")
+
+    info = kestrel_llm_vertex.VertexAIAdapter.create_provider({})
+
+    fake_genai.Client.assert_called_once_with(api_key="sk-gemini")
+    assert info.client is fake_client
+
+
+def test_vertex_factory_uses_vertex_project_mode(monkeypatch):
+    import kestrel_llm_vertex
+
+    fake_client = MagicMock()
+    fake_genai = SimpleNamespace(Client=MagicMock(return_value=fake_client))
+    monkeypatch.setattr(kestrel_llm_vertex, "_load_genai", lambda: fake_genai)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "kestrel-project")
+
+    info = kestrel_llm_vertex.VertexAIAdapter.create_provider({"location": "us-east5"})
+
+    fake_genai.Client.assert_called_once_with(
+        vertexai=True,
+        project="kestrel-project",
+        location="us-east5",
+    )
+    assert info.client is fake_client
 
 
 class _AsyncStream:
@@ -181,6 +241,63 @@ def test_kimi_normalize_messages_adds_reasoning_content_to_tool_call_history():
     assert "reasoning_content" not in messages[1]
 
 
+def test_vertex_normalize_messages_converts_chat_tool_history():
+    messages = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"q": "kestrel"},
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "name": "lookup",
+            "tool_call_id": "call_1",
+            "content": '{"ok": true}',
+        },
+    ]
+
+    system_prompt, contents = normalize_vertex_messages(messages)
+
+    assert system_prompt == "Be brief."
+    assert contents == [
+        {"role": "user", "parts": [{"text": "hi"}]},
+        {
+            "role": "model",
+            "parts": [
+                {
+                    "function_call": {
+                        "id": "call_1",
+                        "name": "lookup",
+                        "args": {"q": "kestrel"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "name": "lookup",
+                        "response": {"result": {"ok": True}},
+                    }
+                }
+            ],
+        },
+    ]
+
+
 def test_to_llm_response_preserves_raw_provider_reasoning_object():
     raw = SimpleNamespace(
         choices=[
@@ -233,17 +350,61 @@ def test_openai_compatible_capabilities_can_disable_feature_modes():
 
 
 @pytest.mark.parametrize(
-    ("module_name", "class_name", "supports_vision", "model_dependent"),
+    (
+        "module_name",
+        "class_name",
+        "supports_vision",
+        "structured_output_mode",
+        "tool_streaming_mode",
+        "vision_input_mode",
+        "model_dependent",
+    ),
     [
-        ("kestrel_llm_deepseek", "DeepSeekAdapter", False, {"structured_output"}),
-        ("kestrel_llm_xai", "XAIAdapter", True, {"vision", "structured_output"}),
-        ("kestrel_llm_kimi", "KimiAdapter", False, {"structured_output"}),
+        (
+            "kestrel_llm_deepseek",
+            "DeepSeekAdapter",
+            False,
+            StructuredOutputMode.JSON_SCHEMA,
+            ToolStreamingMode.NATIVE_DELTA,
+            VisionInputMode.NONE,
+            {"structured_output"},
+        ),
+        (
+            "kestrel_llm_xai",
+            "XAIAdapter",
+            True,
+            StructuredOutputMode.JSON_SCHEMA,
+            ToolStreamingMode.NATIVE_DELTA,
+            VisionInputMode.OPENAI_IMAGE_URL,
+            {"vision", "structured_output"},
+        ),
+        (
+            "kestrel_llm_kimi",
+            "KimiAdapter",
+            False,
+            StructuredOutputMode.JSON_SCHEMA,
+            ToolStreamingMode.NATIVE_DELTA,
+            VisionInputMode.NONE,
+            {"structured_output"},
+        ),
+        (
+            "kestrel_llm_vertex",
+            "VertexAIAdapter",
+            True,
+            StructuredOutputMode.PROVIDER_NATIVE,
+            ToolStreamingMode.NONSTREAM_FALLBACK,
+            VisionInputMode.GEMINI_INLINE_DATA,
+            {"tools", "vision", "structured_output"},
+        ),
     ],
 )
 def test_provider_plugins_declare_capabilities(
     module_name,
     class_name,
     supports_vision,
+    structured_output_mode,
+    tool_streaming_mode,
+    vision_input_mode,
     model_dependent,
 ):
     module = __import__(module_name)
@@ -255,11 +416,9 @@ def test_provider_plugins_declare_capabilities(
     assert capabilities.supports_streaming is True
     assert capabilities.supports_vision is supports_vision
     assert capabilities.supports_structured_output is True
-    assert capabilities.structured_output_mode == StructuredOutputMode.JSON_SCHEMA
-    assert capabilities.tool_streaming_mode == ToolStreamingMode.NATIVE_DELTA
-    assert capabilities.vision_input_mode == (
-        VisionInputMode.OPENAI_IMAGE_URL if supports_vision else VisionInputMode.NONE
-    )
+    assert capabilities.structured_output_mode == structured_output_mode
+    assert capabilities.tool_streaming_mode == tool_streaming_mode
+    assert capabilities.vision_input_mode == vision_input_mode
     assert set(capabilities.model_dependent) == model_dependent
     assert capabilities.notes
 
@@ -419,26 +578,270 @@ async def test_openai_compatible_plugins_get_response_normalizes_tool_history(
         assert "reasoning_content" not in captured_kwargs["messages"][0]
 
 
+async def test_vertex_get_response_builds_generation_config_with_tools_and_schema():
+    from kestrel_llm_vertex import VertexAIAdapter
+
+    class Answer(BaseModel):
+        ok: bool
+
+    adapter = VertexAIAdapter()
+    captured_kwargs = {}
+    raw = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(
+                content=SimpleNamespace(
+                    parts=[
+                        SimpleNamespace(text=None, function_call=SimpleNamespace(
+                            id="call_1",
+                            name="lookup",
+                            args={"q": "kestrel"},
+                        ))
+                    ]
+                )
+            )
+        ],
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=2,
+            candidates_token_count=3,
+            total_token_count=5,
+        ),
+    )
+
+    async def generate_content(**kwargs):
+        captured_kwargs.update(kwargs)
+        return raw
+
+    client = SimpleNamespace(
+        aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate_content))
+    )
+
+    response = await adapter.get_response(
+        client,
+        "gemini-test",
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "health?"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup health",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        response_format=Answer,
+        max_tokens=20,
+        temperature=0,
+    )
+
+    assert captured_kwargs["model"] == "gemini-test"
+    assert captured_kwargs["contents"] == [{"role": "user", "parts": [{"text": "health?"}]}]
+    config = captured_kwargs["config"]
+    assert config["system_instruction"] == "Be brief."
+    assert config["max_output_tokens"] == 20
+    assert config["temperature"] == 0
+    assert config["response_mime_type"] == "application/json"
+    assert config["response_json_schema"]["title"] == "Answer"
+    assert config["tools"] == [
+        {
+            "function_declarations": [
+                {
+                    "name": "lookup",
+                    "description": "Lookup health",
+                    "parameters_json_schema": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                }
+            ]
+        }
+    ]
+    assert response.tool_calls[0].id == "call_1"
+    assert response.tool_calls[0].name == "lookup"
+    assert response.tool_calls[0].arguments == {"q": "kestrel"}
+    assert response.input_tokens == 2
+    assert response.output_tokens == 3
+    assert response.total_tokens == 5
+
+
+def test_vertex_tool_schema_keys_validate_with_google_genai():
+    from google.genai import types
+    from kestrel_llm_vertex import _generation_config
+
+    config = _generation_config(
+        system_prompt=None,
+        format=None,
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup health",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        response_format=None,
+        kwargs={},
+    )
+
+    sdk_config = types.GenerateContentConfig(**config)
+
+    assert sdk_config.model_dump(exclude_none=True, by_alias=True)["tools"] == [
+        {
+            "functionDeclarations": [
+                {
+                    "description": "Lookup health",
+                    "name": "lookup",
+                    "parametersJsonSchema": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                }
+            ]
+        }
+    ]
+
+
+def test_vertex_extract_response_tolerates_text_property_errors():
+    from kestrel_llm_vertex import _extract_response
+
+    class EmptyResponse:
+        candidates = []
+        usage_metadata = None
+
+        @property
+        def text(self):
+            raise ValueError("No text parts")
+
+    response = _extract_response(EmptyResponse())
+
+    assert response.content is None
+    assert response.tool_calls is None
+
+
+async def test_vertex_streaming_with_tools_uses_nonstreaming_handoff():
+    from kestrel_llm_vertex import VertexAIAdapter
+
+    adapter = VertexAIAdapter()
+    response = LLMResponse(
+        content=None,
+        tool_calls=[ToolCall(id="call_1", name="lookup", arguments={})],
+    )
+
+    async def get_response(*args, **kwargs):
+        return response
+
+    adapter.get_response = get_response
+
+    items = [
+        item
+        async for item in adapter.get_streaming_response_with_tools(
+            MagicMock(),
+            "model",
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "lookup"}}],
+        )
+    ]
+
+    assert items[0] == ToolCallStarted(index=0, id="call_1", name="lookup")
+    assert items[1] is response
+
+
+class _AsyncModelList:
+    def __init__(self, items):
+        self._items = items
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._items:
+            raise StopAsyncIteration
+        return self._items.pop(0)
+
+
+async def test_vertex_list_models_uses_async_client():
+    from kestrel_llm_vertex import VertexAIAdapter
+
+    async def list_models():
+        return _AsyncModelList(
+            [
+                SimpleNamespace(
+                    name="publishers/google/models/gemini-2.5-flash",
+                    display_name="Gemini 2.5 Flash",
+                    description="Fast Gemini model",
+                    input_token_limit=1000000,
+                ),
+                SimpleNamespace(
+                    name="publishers/google/models/text-embedding-005",
+                    display_name="Text Embedding 005",
+                    description="Embedding model",
+                    input_token_limit=2048,
+                ),
+                SimpleNamespace(
+                    name="publishers/google/models/imagen-4.0-generate-preview",
+                    display_name="Imagen 4",
+                    description="Image model",
+                    input_token_limit=None,
+                ),
+            ]
+        )
+
+    client = SimpleNamespace(
+        aio=SimpleNamespace(models=SimpleNamespace(list=list_models)),
+        models=SimpleNamespace(list=MagicMock(side_effect=AssertionError("sync list used"))),
+    )
+
+    models = await VertexAIAdapter().list_models(client)
+
+    assert len(models) == 3
+    assert models[0].id == "publishers/google/models/gemini-2.5-flash"
+    assert models[0].provider == "vertex_ai"
+    assert models[0].supports_vision is True
+    assert models[0].supports_tools is True
+    assert models[0].supports_streaming is True
+    assert models[1].category == ModelCategory.EMBEDDING
+    assert models[1].supports_tools is False
+    assert models[1].supports_streaming is False
+    assert models[2].category == ModelCategory.IMAGE
+    assert models[2].supports_tools is False
+    assert models[2].supports_streaming is False
+
+
 def test_registry_discovers_first_wave_plugins(monkeypatch):
     import kestrel_llm_deepseek
     import kestrel_llm_kimi
+    import kestrel_llm_vertex
     import kestrel_llm_xai
 
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek")
     monkeypatch.setenv("XAI_API_KEY", "sk-xai")
     monkeypatch.setenv("MOONSHOT_API_KEY", "sk-kimi")
+    monkeypatch.setenv("GOOGLE_API_KEY", "sk-google")
 
     entry_points = [
         _entry_point("deepseek", kestrel_llm_deepseek.DeepSeekAdapter),
         _entry_point("xai", kestrel_llm_xai.XAIAdapter),
         _entry_point("kimi", kestrel_llm_kimi.KimiAdapter),
+        _entry_point("vertex_ai", kestrel_llm_vertex.VertexAIAdapter),
     ]
     config = {
-        "route_priority": ["deepseek:api", "xai:api", "kimi:api"],
+        "route_priority": ["deepseek:api", "xai:api", "kimi:api", "vertex_ai:api"],
         "vendors": {
             "deepseek": {"routes": {"api": {}}},
             "xai": {"routes": {"api": {}}},
             "kimi": {"routes": {"api": {}}},
+            "vertex_ai": {"routes": {"api": {}}},
         },
     }
 
@@ -447,19 +850,23 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         patch.object(kestrel_llm_deepseek.openai, "AsyncOpenAI", return_value=MagicMock()),
         patch.object(kestrel_llm_xai.openai, "AsyncOpenAI", return_value=MagicMock()),
         patch.object(kestrel_llm_kimi.openai, "AsyncOpenAI", return_value=MagicMock()),
+        patch.object(kestrel_llm_vertex, "_load_genai") as load_genai,
     ):
+        load_genai.return_value = SimpleNamespace(Client=MagicMock(return_value=MagicMock()))
         providers = ProviderRegistry(config).initialize_providers()
 
     assert [provider.name for provider in providers] == [
         "deepseek:api",
         "xai:api",
         "kimi:api",
+        "vertex_ai:api",
     ]
     assert {provider.name for provider in providers if provider.is_local} == set()
     assert {provider.name for provider in providers if provider.is_cloud} == {
         "deepseek:api",
         "xai:api",
         "kimi:api",
+        "vertex_ai:api",
     }
 
 
@@ -478,6 +885,7 @@ def _load_pyproject(package: str) -> dict:
         ("kestrel-llm-deepseek", "deepseek"),
         ("kestrel-llm-xai", "xai"),
         ("kestrel-llm-kimi", "kimi"),
+        ("kestrel-llm-vertex", "vertex_ai"),
     ],
 )
 def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
@@ -486,7 +894,10 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
 
     assert project["name"] == package
     assert "kestrel-sovereign-sdk>=0.17.0,<1" in project["dependencies"]
-    assert "kestrel-llm-openai-compat>=0.1.7,<0.2" in project["dependencies"]
+    if package == "kestrel-llm-vertex":
+        assert "google-genai>=1.75.0,<3" in project["dependencies"]
+    else:
+        assert "kestrel-llm-openai-compat>=0.1.7,<0.2" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
 
     entry_points = pyproject["project"]["entry-points"][LLM_PROVIDER_ENTRY_POINT_GROUP]
@@ -497,14 +908,16 @@ def test_meta_package_extras_track_first_wave_packages():
     pyproject = _load_pyproject("kestrel-llms")
     extras = pyproject["project"]["optional-dependencies"]
 
-    assert set(extras) == {"deepseek", "xai", "kimi", "cloud", "all"}
+    assert set(extras) == {"deepseek", "xai", "kimi", "vertex", "cloud", "all"}
     assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.8,<0.2"]
     assert extras["xai"] == ["kestrel-llm-xai>=0.1.8,<0.2"]
     assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.8,<0.2"]
+    assert extras["vertex"] == ["kestrel-llm-vertex>=0.1.0,<0.2"]
     assert set(extras["cloud"]) == {
         "kestrel-llm-deepseek>=0.1.8,<0.2",
         "kestrel-llm-xai>=0.1.8,<0.2",
         "kestrel-llm-kimi>=0.1.8,<0.2",
+        "kestrel-llm-vertex>=0.1.0,<0.2",
     }
     assert set(extras["all"]) == set(extras["cloud"])
 

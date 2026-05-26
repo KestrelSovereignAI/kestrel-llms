@@ -23,6 +23,7 @@ package = false
 kestrel-llm-deepseek = { workspace = true }
 kestrel-llm-xai = { workspace = true }
 kestrel-llm-kimi = { workspace = true }
+kestrel-llm-vertex = { workspace = true }
 kestrel-llm-openai-compat = { workspace = true }
 
 [tool.uv.workspace]

@@ -26,6 +26,7 @@ on:
           - kestrel-llm-deepseek
           - kestrel-llm-xai
           - kestrel-llm-kimi
+          - kestrel-llm-vertex
           - kestrel-llms
 
 permissions:

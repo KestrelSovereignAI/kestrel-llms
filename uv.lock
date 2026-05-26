@@ -12,6 +12,7 @@ members = [
     "kestrel-llm-deepseek",
     "kestrel-llm-kimi",
     "kestrel-llm-openai-compat",
+    "kestrel-llm-vertex",
     "kestrel-llm-xai",
     "kestrel-llms",
     "kestrel-llms-workspace",
@@ -1016,7 +1017,7 @@ wheels = [
 
 [[package]]
 name = "google-genai"
-version = "2.4.0"
+version = "2.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1030,9 +1031,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "websockets" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b6/91/15fff1b7c22dc0b5b44fa348f151379721353d06a3da22dbbe15bf2c4dd9/google_genai-2.4.0.tar.gz", hash = "sha256:3f8d4bd618be2801e805dc698726731a70f34b438ea25a6c92800eef5b1f513e", size = 552025, upload-time = "2026-05-18T00:25:14.556Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/ec/6e49f50f5c70588d97c6ed25e0b8c18828bf4d58895f397b53a7522168a1/google_genai-2.6.0.tar.gz", hash = "sha256:7d4f777234002f2e94be499dbdfb43b506a6aca9dbbec13e61d3dc6ce640ffa7", size = 554809, upload-time = "2026-05-22T01:34:33.581Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/c8/1b49f6bb69dc7e291ba5d14926937bec4dffcc09ee875822636bd5ef3cf4/google_genai-2.4.0-py3-none-any.whl", hash = "sha256:48df1c44190b05b834fee9cffd360af6d6fd7f68164588e7ebd670fa34f71ee1", size = 818207, upload-time = "2026-05-18T00:25:12.426Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/9e/e8ba4e58a9d5daf42343f3ea1cb0efb721eba36a1d6624e9873d039a5c1e/google_genai-2.6.0-py3-none-any.whl", hash = "sha256:272b6f6320f5d355735241ad441f972af095ec80dc10cb075cb430d96721648a", size = 821003, upload-time = "2026-05-22T01:34:31.55Z" },
 ]
 
 [[package]]
@@ -1433,6 +1434,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "kestrel-llm-vertex"
+version = "0.1.0"
+source = { editable = "providers/kestrel-llm-vertex" }
+dependencies = [
+    { name = "google-genai" },
+    { name = "kestrel-sovereign-sdk" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "google-genai", specifier = ">=1.75.0,<3" },
+    { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[[package]]
 name = "kestrel-llm-xai"
 version = "0.1.8"
 source = { editable = "providers/kestrel-llm-xai" }
@@ -1453,7 +1471,7 @@ requires-dist = [
 
 [[package]]
 name = "kestrel-llms"
-version = "0.1.6"
+version = "0.1.7"
 source = { editable = "providers/kestrel-llms" }
 dependencies = [
     { name = "kestrel-sovereign-sdk" },
@@ -1463,11 +1481,13 @@ dependencies = [
 all = [
     { name = "kestrel-llm-deepseek" },
     { name = "kestrel-llm-kimi" },
+    { name = "kestrel-llm-vertex" },
     { name = "kestrel-llm-xai" },
 ]
 cloud = [
     { name = "kestrel-llm-deepseek" },
     { name = "kestrel-llm-kimi" },
+    { name = "kestrel-llm-vertex" },
     { name = "kestrel-llm-xai" },
 ]
 deepseek = [
@@ -1475,6 +1495,9 @@ deepseek = [
 ]
 kimi = [
     { name = "kestrel-llm-kimi" },
+]
+vertex = [
+    { name = "kestrel-llm-vertex" },
 ]
 xai = [
     { name = "kestrel-llm-xai" },
@@ -1488,12 +1511,15 @@ requires-dist = [
     { name = "kestrel-llm-kimi", marker = "extra == 'all'", editable = "providers/kestrel-llm-kimi" },
     { name = "kestrel-llm-kimi", marker = "extra == 'cloud'", editable = "providers/kestrel-llm-kimi" },
     { name = "kestrel-llm-kimi", marker = "extra == 'kimi'", editable = "providers/kestrel-llm-kimi" },
+    { name = "kestrel-llm-vertex", marker = "extra == 'all'", editable = "providers/kestrel-llm-vertex" },
+    { name = "kestrel-llm-vertex", marker = "extra == 'cloud'", editable = "providers/kestrel-llm-vertex" },
+    { name = "kestrel-llm-vertex", marker = "extra == 'vertex'", editable = "providers/kestrel-llm-vertex" },
     { name = "kestrel-llm-xai", marker = "extra == 'all'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-llm-xai", marker = "extra == 'cloud'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-llm-xai", marker = "extra == 'xai'", editable = "providers/kestrel-llm-xai" },
     { name = "kestrel-sovereign-sdk", specifier = ">=0.17.0,<1" },
 ]
-provides-extras = ["deepseek", "xai", "kimi", "cloud", "all"]
+provides-extras = ["deepseek", "xai", "kimi", "vertex", "cloud", "all"]
 
 [[package]]
 name = "kestrel-llms-workspace"
