@@ -25,6 +25,7 @@ for src in [
     ROOT / "providers/kestrel-llm-xai/src",
     ROOT / "providers/kestrel-llm-kimi/src",
     ROOT / "providers/kestrel-llm-vertex/src",
+    ROOT / "providers/kestrel-llm-bedrock/src",
     ROOT / "providers/kestrel-llm-openai-compat/src",
 ]:
     sys.path.insert(0, str(src))
@@ -40,6 +41,7 @@ from kestrel_llm_openai_compat import (  # noqa: E402
 )
 from kestrel_llm_kimi import normalize_kimi_messages  # noqa: E402
 from kestrel_llm_vertex import normalize_vertex_messages  # noqa: E402
+from kestrel_llm_bedrock import normalize_bedrock_messages  # noqa: E402
 
 
 def _entry_point(name: str, cls):
@@ -156,6 +158,74 @@ def test_vertex_factory_uses_vertex_project_mode(monkeypatch):
         location="us-east5",
     )
     assert info.client is fake_client
+
+
+def test_bedrock_factory_uses_profile_and_region(monkeypatch):
+    import kestrel_llm_bedrock
+
+    fake_runtime_client = MagicMock()
+    fake_management_client = MagicMock()
+    fake_session = MagicMock()
+    fake_session.client.side_effect = [fake_runtime_client, fake_management_client]
+    fake_boto3 = SimpleNamespace(Session=MagicMock(return_value=fake_session))
+    retry_config = object()
+    monkeypatch.setattr(kestrel_llm_bedrock, "_load_boto3", lambda: fake_boto3)
+    monkeypatch.setattr(kestrel_llm_bedrock, "_client_config", lambda: retry_config)
+
+    info = kestrel_llm_bedrock.BedrockAdapter.create_provider(
+        {"profile": "prod", "region": "us-west-2", "model": "anthropic.test"}
+    )
+
+    fake_boto3.Session.assert_called_once_with(profile_name="prod")
+    assert fake_session.client.call_args_list[0].args == ("bedrock-runtime",)
+    assert fake_session.client.call_args_list[0].kwargs == {
+        "region_name": "us-west-2",
+        "endpoint_url": None,
+        "config": retry_config,
+    }
+    assert fake_session.client.call_args_list[1].args == ("bedrock",)
+    assert fake_session.client.call_args_list[1].kwargs == {
+        "region_name": "us-west-2",
+        "endpoint_url": None,
+        "config": retry_config,
+    }
+    assert info.name == "bedrock:api"
+    assert info.vendor == "bedrock"
+    assert info.route == "api"
+    assert info.client.runtime is fake_runtime_client
+    assert info.client.management is fake_management_client
+    assert info.model == "anthropic.test"
+    assert info.is_cloud is True
+    assert info.is_local is False
+
+
+def test_bedrock_factory_uses_static_credentials(monkeypatch):
+    import kestrel_llm_bedrock
+
+    fake_session = MagicMock()
+    fake_boto3 = SimpleNamespace(Session=MagicMock(return_value=fake_session))
+    monkeypatch.setattr(kestrel_llm_bedrock, "_load_boto3", lambda: fake_boto3)
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-central-1")
+
+    kestrel_llm_bedrock.BedrockAdapter.create_provider(
+        {
+            "aws_access_key_id": "key",
+            "aws_secret_access_key": "secret",
+            "aws_session_token": "token",
+        }
+    )
+
+    fake_boto3.Session.assert_called_once_with(
+        aws_access_key_id="key",
+        aws_secret_access_key="secret",
+        aws_session_token="token",
+    )
+    assert [call.args for call in fake_session.client.call_args_list] == [
+        ("bedrock-runtime",),
+        ("bedrock",),
+    ]
+    assert fake_session.client.call_args_list[0].kwargs["region_name"] == "eu-central-1"
+    assert fake_session.client.call_args_list[1].kwargs["region_name"] == "eu-central-1"
 
 
 class _AsyncStream:
@@ -298,6 +368,62 @@ def test_vertex_normalize_messages_converts_chat_tool_history():
     ]
 
 
+def test_bedrock_normalize_messages_converts_tool_history_and_system():
+    messages = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": {"q": "kestrel"},
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": '{"ok": true}',
+        },
+    ]
+
+    system, normalized = normalize_bedrock_messages(messages)
+
+    assert system == [{"text": "Be brief."}]
+    assert normalized == [
+        {"role": "user", "content": [{"text": "hi"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "toolUse": {
+                        "toolUseId": "call_1",
+                        "name": "lookup",
+                        "input": {"q": "kestrel"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "toolResult": {
+                        "toolUseId": "call_1",
+                        "content": [{"json": {"ok": True}}],
+                    }
+                }
+            ],
+        },
+    ]
+
+
 def test_to_llm_response_preserves_raw_provider_reasoning_object():
     raw = SimpleNamespace(
         choices=[
@@ -395,6 +521,15 @@ def test_openai_compatible_capabilities_can_disable_feature_modes():
             ToolStreamingMode.NONSTREAM_FALLBACK,
             VisionInputMode.GEMINI_INLINE_DATA,
             {"tools", "vision", "structured_output"},
+        ),
+        (
+            "kestrel_llm_bedrock",
+            "BedrockAdapter",
+            True,
+            StructuredOutputMode.TOOL_FORCED,
+            ToolStreamingMode.NATIVE_DELTA,
+            VisionInputMode.PROVIDER_NATIVE,
+            {"tools", "vision", "structured_output", "streaming"},
         ),
     ],
 )
@@ -818,7 +953,170 @@ async def test_vertex_list_models_uses_async_client():
     assert models[2].supports_streaming is False
 
 
+async def test_bedrock_get_response_builds_converse_payload_with_tools_and_schema():
+    from kestrel_llm_bedrock import BedrockAdapter
+
+    class Answer(BaseModel):
+        ok: bool
+
+    client = MagicMock()
+    client.converse.return_value = {
+        "output": {
+            "message": {
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "structured_1",
+                            "name": "kestrel_structured_response",
+                            "input": {"ok": True},
+                        }
+                    }
+                ]
+            }
+        },
+        "usage": {"inputTokens": 2, "outputTokens": 3, "totalTokens": 5},
+    }
+
+    response = await BedrockAdapter().get_response(
+        client,
+        "anthropic.test",
+        [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "health?"},
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup health",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        response_format=Answer,
+        max_tokens=20,
+        temperature=0,
+    )
+
+    payload = client.converse.call_args.kwargs
+    assert payload["modelId"] == "anthropic.test"
+    assert payload["system"] == [{"text": "Be brief."}]
+    assert payload["messages"] == [{"role": "user", "content": [{"text": "health?"}]}]
+    assert payload["inferenceConfig"] == {"maxTokens": 20, "temperature": 0}
+    assert payload["toolConfig"]["toolChoice"] == {
+        "tool": {"name": "kestrel_structured_response"}
+    }
+    assert payload["toolConfig"]["tools"][0]["toolSpec"]["name"] == "lookup"
+    assert payload["toolConfig"]["tools"][1]["toolSpec"]["name"] == "kestrel_structured_response"
+    assert response.content == '{"ok": true}'
+    assert response.input_tokens == 2
+    assert response.output_tokens == 3
+    assert response.total_tokens == 5
+
+
+async def test_bedrock_streaming_with_tools_emits_marker_and_final_response():
+    from kestrel_llm_bedrock import BedrockAdapter
+
+    client = MagicMock()
+    client.converse_stream.return_value = {
+        "stream": [
+            {"contentBlockDelta": {"delta": {"text": "Checking. "}}},
+            {
+                "contentBlockStart": {
+                    "contentBlockIndex": 1,
+                    "start": {
+                        "toolUse": {
+                            "toolUseId": "call_1",
+                            "name": "lookup",
+                        }
+                    },
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 1,
+                    "delta": {"toolUse": {"input": '{"q"'}},
+                }
+            },
+            {
+                "contentBlockDelta": {
+                    "contentBlockIndex": 1,
+                    "delta": {"toolUse": {"input": ':"kestrel"}'}},
+                }
+            },
+            {"metadata": {"usage": {"inputTokens": 5, "outputTokens": 7, "totalTokens": 12}}},
+        ]
+    }
+
+    items = [
+        item
+        async for item in BedrockAdapter().get_streaming_response_with_tools(
+            client,
+            "model",
+            [{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "lookup"}}],
+        )
+    ]
+
+    assert items[0] == "Checking. "
+    assert items[1] == ToolCallStarted(index=1, id="call_1", name="lookup")
+    final = items[-1]
+    assert isinstance(final, LLMResponse)
+    assert final.content == "Checking. "
+    assert final.tool_calls[0].id == "call_1"
+    assert final.tool_calls[0].name == "lookup"
+    assert final.tool_calls[0].arguments == {"q": "kestrel"}
+    assert final.input_tokens == 5
+    assert final.output_tokens == 7
+    assert final.total_tokens == 12
+
+
+async def test_bedrock_list_models_uses_foundation_model_api(monkeypatch):
+    from kestrel_llm_bedrock import BedrockAdapter, BedrockClients
+
+    runtime_client = MagicMock()
+    bedrock_client = MagicMock()
+    bedrock_client.list_foundation_models.return_value = {
+        "modelSummaries": [
+            {
+                "modelId": "anthropic.claude-3-5-sonnet",
+                "modelName": "Claude 3.5 Sonnet",
+                "providerName": "Anthropic",
+            },
+            {
+                "modelId": "amazon.titan-embed-text-v2:0",
+                "modelName": "Titan Embed",
+                "providerName": "Amazon",
+            },
+        ]
+    }
+    models = await BedrockAdapter().list_models(
+        BedrockClients(runtime=runtime_client, management=bedrock_client, region="us-west-2")
+    )
+
+    assert [model.id for model in models] == [
+        "anthropic.claude-3-5-sonnet",
+        "amazon.titan-embed-text-v2:0",
+    ]
+    assert models[0].category == ModelCategory.CHAT
+    assert models[0].supports_tools is True
+    assert models[1].category == ModelCategory.EMBEDDING
+    assert models[1].supports_tools is False
+
+
+async def test_bedrock_list_models_rejects_raw_runtime_client():
+    from kestrel_llm_bedrock import BedrockAdapter
+
+    with pytest.raises(ValueError, match="BedrockClients"):
+        await BedrockAdapter().list_models(object())
+
+
 def test_registry_discovers_first_wave_plugins(monkeypatch):
+    import kestrel_llm_bedrock
     import kestrel_llm_deepseek
     import kestrel_llm_kimi
     import kestrel_llm_vertex
@@ -834,14 +1132,16 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         _entry_point("xai", kestrel_llm_xai.XAIAdapter),
         _entry_point("kimi", kestrel_llm_kimi.KimiAdapter),
         _entry_point("vertex_ai", kestrel_llm_vertex.VertexAIAdapter),
+        _entry_point("bedrock", kestrel_llm_bedrock.BedrockAdapter),
     ]
     config = {
-        "route_priority": ["deepseek:api", "xai:api", "kimi:api", "vertex_ai:api"],
+        "route_priority": ["deepseek:api", "xai:api", "kimi:api", "vertex_ai:api", "bedrock:api"],
         "vendors": {
             "deepseek": {"routes": {"api": {}}},
             "xai": {"routes": {"api": {}}},
             "kimi": {"routes": {"api": {}}},
             "vertex_ai": {"routes": {"api": {}}},
+            "bedrock": {"routes": {"api": {"region": "us-west-2"}}},
         },
     }
 
@@ -851,8 +1151,12 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         patch.object(kestrel_llm_xai.openai, "AsyncOpenAI", return_value=MagicMock()),
         patch.object(kestrel_llm_kimi.openai, "AsyncOpenAI", return_value=MagicMock()),
         patch.object(kestrel_llm_vertex, "_load_genai") as load_genai,
+        patch.object(kestrel_llm_bedrock, "_load_boto3") as load_boto3,
     ):
         load_genai.return_value = SimpleNamespace(Client=MagicMock(return_value=MagicMock()))
+        fake_bedrock_session = MagicMock()
+        fake_bedrock_session.client.return_value = MagicMock()
+        load_boto3.return_value = SimpleNamespace(Session=MagicMock(return_value=fake_bedrock_session))
         providers = ProviderRegistry(config).initialize_providers()
 
     assert [provider.name for provider in providers] == [
@@ -860,6 +1164,7 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         "xai:api",
         "kimi:api",
         "vertex_ai:api",
+        "bedrock:api",
     ]
     assert {provider.name for provider in providers if provider.is_local} == set()
     assert {provider.name for provider in providers if provider.is_cloud} == {
@@ -867,6 +1172,7 @@ def test_registry_discovers_first_wave_plugins(monkeypatch):
         "xai:api",
         "kimi:api",
         "vertex_ai:api",
+        "bedrock:api",
     }
 
 
@@ -886,6 +1192,7 @@ def _load_pyproject(package: str) -> dict:
         ("kestrel-llm-xai", "xai"),
         ("kestrel-llm-kimi", "kimi"),
         ("kestrel-llm-vertex", "vertex_ai"),
+        ("kestrel-llm-bedrock", "bedrock"),
     ],
 )
 def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
@@ -896,6 +1203,8 @@ def test_provider_pyprojects_keep_plugin_contract(package, entry_point):
     assert "kestrel-sovereign-sdk>=0.17.0,<1" in project["dependencies"]
     if package == "kestrel-llm-vertex":
         assert "google-genai>=1.75.0,<3" in project["dependencies"]
+    elif package == "kestrel-llm-bedrock":
+        assert "boto3>=1.34,<2" in project["dependencies"]
     else:
         assert "kestrel-llm-openai-compat>=0.1.7,<0.2" in project["dependencies"]
     assert not any(dep.startswith("kestrel_sovereign") for dep in project["dependencies"])
@@ -908,12 +1217,14 @@ def test_meta_package_extras_track_first_wave_packages():
     pyproject = _load_pyproject("kestrel-llms")
     extras = pyproject["project"]["optional-dependencies"]
 
-    assert set(extras) == {"deepseek", "xai", "kimi", "vertex", "cloud", "all"}
+    assert set(extras) == {"deepseek", "xai", "kimi", "vertex", "bedrock", "cloud", "all"}
+    assert extras["bedrock"] == ["kestrel-llm-bedrock>=0.1.0,<0.2"]
     assert extras["deepseek"] == ["kestrel-llm-deepseek>=0.1.8,<0.2"]
     assert extras["xai"] == ["kestrel-llm-xai>=0.1.8,<0.2"]
     assert extras["kimi"] == ["kestrel-llm-kimi>=0.1.8,<0.2"]
     assert extras["vertex"] == ["kestrel-llm-vertex>=0.1.0,<0.2"]
     assert set(extras["cloud"]) == {
+        "kestrel-llm-bedrock>=0.1.0,<0.2",
         "kestrel-llm-deepseek>=0.1.8,<0.2",
         "kestrel-llm-xai>=0.1.8,<0.2",
         "kestrel-llm-kimi>=0.1.8,<0.2",

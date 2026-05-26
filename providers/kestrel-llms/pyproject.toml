@@ -1,6 +1,6 @@
 [project]
 name = "kestrel-llms"
-version = "0.1.7"
+version = "0.1.8"
 description = "Convenience extras for Kestrel Sovereign LLM provider plugins."
 requires-python = ">=3.11"
 dependencies = [
@@ -12,13 +12,16 @@ deepseek = ["kestrel-llm-deepseek>=0.1.8,<0.2"]
 xai = ["kestrel-llm-xai>=0.1.8,<0.2"]
 kimi = ["kestrel-llm-kimi>=0.1.8,<0.2"]
 vertex = ["kestrel-llm-vertex>=0.1.0,<0.2"]
+bedrock = ["kestrel-llm-bedrock>=0.1.0,<0.2"]
 cloud = [
+    "kestrel-llm-bedrock>=0.1.0,<0.2",
     "kestrel-llm-deepseek>=0.1.8,<0.2",
     "kestrel-llm-xai>=0.1.8,<0.2",
     "kestrel-llm-kimi>=0.1.8,<0.2",
     "kestrel-llm-vertex>=0.1.0,<0.2",
 ]
 all = [
+    "kestrel-llm-bedrock>=0.1.0,<0.2",
     "kestrel-llm-deepseek>=0.1.8,<0.2",
     "kestrel-llm-xai>=0.1.8,<0.2",
     "kestrel-llm-kimi>=0.1.8,<0.2",
