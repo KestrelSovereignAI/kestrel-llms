@@ -14,7 +14,8 @@ name: Publish to PyPI
 #   3. kestrel-llm-xai
 #   4. kestrel-llm-kimi
 #   5. kestrel-llm-vertex
-#   6. kestrel-llms
+#   6. kestrel-llm-bedrock
+#   7. kestrel-llms
 
 on:
   workflow_dispatch:
@@ -29,6 +30,7 @@ on:
           - kestrel-llm-xai
           - kestrel-llm-kimi
           - kestrel-llm-vertex
+          - kestrel-llm-bedrock
           - kestrel-llms
       ref:
         description: "Git ref to publish"

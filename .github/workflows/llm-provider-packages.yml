@@ -27,6 +27,7 @@ on:
           - kestrel-llm-xai
           - kestrel-llm-kimi
           - kestrel-llm-vertex
+          - kestrel-llm-bedrock
           - kestrel-llms
 
 permissions:
