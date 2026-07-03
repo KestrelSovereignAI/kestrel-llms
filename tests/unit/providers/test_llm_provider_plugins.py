@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
@@ -1022,8 +1023,11 @@ async def test_bedrock_streaming_with_tools_emits_marker_and_final_response():
     from kestrel_llm_bedrock import BedrockAdapter
 
     client = MagicMock()
+    # A single-pass iterator (not a reusable list), so the stream is consumed
+    # exactly like a real botocore EventStream — and so the F407 off-loop pump
+    # is exercised rather than masked by a re-iterable list.
     client.converse_stream.return_value = {
-        "stream": [
+        "stream": iter([
             {"contentBlockDelta": {"delta": {"text": "Checking. "}}},
             {
                 "contentBlockStart": {
@@ -1049,7 +1053,7 @@ async def test_bedrock_streaming_with_tools_emits_marker_and_final_response():
                 }
             },
             {"metadata": {"usage": {"inputTokens": 5, "outputTokens": 7, "totalTokens": 12}}},
-        ]
+        ])
     }
 
     items = [
@@ -1073,6 +1077,127 @@ async def test_bedrock_streaming_with_tools_emits_marker_and_final_response():
     assert final.input_tokens == 5
     assert final.output_tokens == 7
     assert final.total_tokens == 12
+
+
+def test_bedrock_normalize_coalesces_parallel_tool_results():
+    """F408: two tool messages after a 2-call assistant turn must collapse into
+    ONE user message with two toolResult blocks, or Bedrock's role-alternation
+    validation rejects the consecutive user messages."""
+    messages = [
+        {"role": "user", "content": "do two things"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "a", "arguments": {}}},
+                {"id": "call_2", "type": "function",
+                 "function": {"name": "b", "arguments": {}}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": '{"r": 1}'},
+        {"role": "tool", "tool_call_id": "call_2", "content": '{"r": 2}'},
+    ]
+
+    _system, normalized = normalize_bedrock_messages(messages)
+
+    assert [m["role"] for m in normalized] == ["user", "assistant", "user"]
+    tool_results = normalized[-1]["content"]
+    assert [b["toolResult"]["toolUseId"] for b in tool_results] == ["call_1", "call_2"]
+
+
+class _ThreadRecordingStream:
+    """EventStream stand-in whose iteration records the thread it runs on, so a
+    test can prove the (blocking) reads happen off the event loop (F407)."""
+
+    def __init__(self, events):
+        self._events = list(events)
+        self._index = 0
+        self.threads = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.threads.append(threading.current_thread())
+        if self._index >= len(self._events):
+            raise StopIteration
+        event = self._events[self._index]
+        self._index += 1
+        return event
+
+
+async def test_bedrock_streaming_iterates_off_the_event_loop():
+    """F407: the botocore EventStream must be pumped in a worker thread, not
+    iterated on the event loop where each blocking read freezes the host."""
+    from kestrel_llm_bedrock import BedrockAdapter
+
+    main_thread = threading.current_thread()
+    stream = _ThreadRecordingStream(
+        [{"contentBlockDelta": {"delta": {"text": "hi"}}}]
+    )
+    client = MagicMock()
+    client.converse_stream.return_value = {"stream": stream}
+
+    chunks = [
+        chunk
+        async for chunk in BedrockAdapter().get_streaming_response(
+            client, "model", [{"role": "user", "content": "x"}]
+        )
+    ]
+
+    assert chunks == ["hi"]
+    assert stream.threads  # the stream was actually iterated
+    assert all(t is not main_thread for t in stream.threads)
+
+
+class _BlockingRecordingStream:
+    """EventStream stand-in that yields some events then BLOCKS (like a live
+    Bedrock stream mid-generation) until ``close()`` is called."""
+
+    def __init__(self, initial_events):
+        self._events = list(initial_events)
+        self._index = 0
+        self._gate = threading.Event()
+        self.closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._index < len(self._events):
+            event = self._events[self._index]
+            self._index += 1
+            return event
+        # Emulate a still-open Bedrock request: block until closed.
+        self._gate.wait(timeout=5.0)
+        raise StopIteration
+
+    def close(self):
+        self.closed = True
+        self._gate.set()
+
+
+async def test_bedrock_streaming_closes_stream_on_early_exit():
+    """F407 (codex P2): if the consumer stops early, the underlying stream is
+    closed so the worker-thread pump stops draining the live Bedrock request."""
+    from kestrel_llm_bedrock import BedrockAdapter
+
+    stream = _BlockingRecordingStream(
+        [{"contentBlockDelta": {"delta": {"text": "hi"}}}]
+    )
+    client = MagicMock()
+    client.converse_stream.return_value = {"stream": stream}
+
+    gen = BedrockAdapter().get_streaming_response(
+        client, "model", [{"role": "user", "content": "x"}]
+    )
+    first = await gen.__anext__()
+    assert first == "hi"
+
+    await gen.aclose()  # simulate a disconnecting consumer
+
+    assert stream.closed is True
 
 
 async def test_bedrock_list_models_uses_foundation_model_api(monkeypatch):

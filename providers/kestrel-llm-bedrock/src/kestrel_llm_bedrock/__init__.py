@@ -187,6 +187,24 @@ def normalize_bedrock_messages(
     system: List[Dict[str, str]] = []
     bedrock_messages: List[Dict[str, Any]] = []
 
+    def _emit(bedrock_role: str, blocks: List[Dict[str, Any]]) -> None:
+        """Append content, coalescing into the previous message when it has the
+        SAME role.
+
+        Bedrock's Converse API validates strict user/assistant alternation and
+        rejects consecutive same-role messages. Sovereign emits one ``role:
+        'tool'`` message per tool call, so a parallel-tool turn (2+ calls) would
+        otherwise map to consecutive ``user`` messages and fail the whole turn
+        with a ValidationException. Merging same-role content keeps N parallel
+        toolResult blocks in a single user message per the contract (F408).
+        """
+        if not blocks:
+            return
+        if bedrock_messages and bedrock_messages[-1]["role"] == bedrock_role:
+            bedrock_messages[-1]["content"].extend(blocks)
+        else:
+            bedrock_messages.append({"role": bedrock_role, "content": list(blocks)})
+
     for message in messages:
         role = message.get("role")
         if role == "system":
@@ -197,18 +215,16 @@ def normalize_bedrock_messages(
 
         if role == "tool":
             tool_use_id = message.get("tool_call_id") or message.get("id") or "tool_result"
-            bedrock_messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "toolResult": {
-                                "toolUseId": tool_use_id,
-                                "content": _tool_result_content(message.get("content")),
-                            }
+            _emit(
+                "user",
+                [
+                    {
+                        "toolResult": {
+                            "toolUseId": tool_use_id,
+                            "content": _tool_result_content(message.get("content")),
                         }
-                    ],
-                }
+                    }
+                ],
             )
             continue
 
@@ -237,8 +253,7 @@ def normalize_bedrock_messages(
         else:
             bedrock_role = "user"
 
-        if blocks:
-            bedrock_messages.append({"role": bedrock_role, "content": blocks})
+        _emit(bedrock_role, blocks)
 
     return system, bedrock_messages
 
@@ -363,6 +378,66 @@ async def _to_thread(func: Any, **kwargs: Any) -> Any:
     return await asyncio.to_thread(func, **kwargs)
 
 
+_STREAM_DONE = object()
+
+
+async def _aiter_event_stream(stream: Any) -> AsyncIterator[Dict[str, Any]]:
+    """Async-iterate a botocore ``EventStream`` WITHOUT blocking the loop.
+
+    Each ``next()`` on a botocore EventStream is a blocking socket read. Running
+    ``for event in stream`` directly inside an async generator executes those
+    reads on the event loop, so between every Bedrock chunk the whole host —
+    all agents, SSE streams, health checks, the A2A server — freezes for the
+    entire generation (F407). Instead pump the stream in a worker thread that
+    feeds an ``asyncio.Queue`` and ``async for`` off the queue, so every event
+    boundary yields control back to the loop. Exceptions from the blocking
+    iteration are propagated to the consumer; a sentinel terminates it.
+    """
+    if stream is None:
+        return
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _pump() -> None:
+        try:
+            for event in stream:
+                loop.call_soon_threadsafe(queue.put_nowait, (event, None))
+        except Exception as exc:  # noqa: BLE001 - surfaced to the consumer
+            loop.call_soon_threadsafe(queue.put_nowait, (None, exc))
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
+
+    task = asyncio.ensure_future(asyncio.to_thread(_pump))
+    try:
+        while True:
+            item = await queue.get()
+            if item is _STREAM_DONE:
+                return
+            event, exc = item
+            if exc is not None:
+                raise exc
+            yield event
+    finally:
+        # If the consumer stopped early (SSE disconnect, an ``async for`` break,
+        # cancellation), close the underlying stream so the pump's BLOCKING read
+        # unblocks and stops draining the still-live Bedrock request to
+        # completion on a worker thread (codex P2). On normal exhaustion the
+        # pump has already finished and close() is a harmless no-op. The test
+        # double for a plain iterator has no close(); guard with getattr.
+        close = getattr(stream, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:  # noqa: BLE001 - best effort teardown
+                pass
+        # The worker thread can't be interrupted mid-read (only closing the
+        # stream unblocks it); retrieve its result so a stray exception isn't
+        # reported as never-retrieved.
+        task.add_done_callback(
+            lambda t: None if t.cancelled() else t.exception()
+        )
+
+
 class BedrockAdapter(LLMAdapter):
     provider_name = "bedrock"
     default_model = DEFAULT_MODEL
@@ -463,10 +538,17 @@ class BedrockAdapter(LLMAdapter):
     ) -> AsyncIterator[str]:
         payload = _request_payload(model, messages, tools, response_format, kwargs)
         response = await _to_thread(_runtime_client(client).converse_stream, **payload)
-        for event in response.get("stream") or []:
-            delta = event.get("contentBlockDelta", {}).get("delta", {})
-            if "text" in delta:
-                yield delta["text"]
+        # Finalize the inner generator DETERMINISTICALLY on early close (it
+        # closes the underlying stream) — a bare ``async for`` would only
+        # finalize it on GC, leaving the live Bedrock request draining (F407).
+        events = _aiter_event_stream(response.get("stream"))
+        try:
+            async for event in events:
+                delta = event.get("contentBlockDelta", {}).get("delta", {})
+                if "text" in delta:
+                    yield delta["text"]
+        finally:
+            await events.aclose()
 
     async def get_streaming_response_with_tools(
         self,
@@ -484,39 +566,46 @@ class BedrockAdapter(LLMAdapter):
         tool_blocks: Dict[int, Dict[str, Any]] = {}
         input_tokens = output_tokens = total_tokens = None
 
-        for event in response.get("stream") or []:
-            if "metadata" in event:
-                input_tokens, output_tokens, total_tokens = _usage_tokens(event["metadata"])
-                continue
+        # Finalize the inner generator deterministically on early close (it
+        # closes the underlying stream, F407); the post-loop final response
+        # only runs on normal completion of the stream.
+        events = _aiter_event_stream(response.get("stream"))
+        try:
+            async for event in events:
+                if "metadata" in event:
+                    input_tokens, output_tokens, total_tokens = _usage_tokens(event["metadata"])
+                    continue
 
-            start = event.get("contentBlockStart", {}).get("start", {})
-            if "toolUse" in start:
-                index = event["contentBlockStart"].get("contentBlockIndex", len(tool_blocks))
-                tool_use = start["toolUse"]
-                tool_blocks[index] = {
-                    "id": tool_use.get("toolUseId") or f"bedrock_tool_{uuid.uuid4().hex}",
-                    "name": tool_use.get("name") or "",
-                    "input": "",
-                }
-                yield ToolCallStarted(
-                    index=index,
-                    id=tool_blocks[index]["id"],
-                    name=tool_blocks[index]["name"],
-                )
-                continue
+                start = event.get("contentBlockStart", {}).get("start", {})
+                if "toolUse" in start:
+                    index = event["contentBlockStart"].get("contentBlockIndex", len(tool_blocks))
+                    tool_use = start["toolUse"]
+                    tool_blocks[index] = {
+                        "id": tool_use.get("toolUseId") or f"bedrock_tool_{uuid.uuid4().hex}",
+                        "name": tool_use.get("name") or "",
+                        "input": "",
+                    }
+                    yield ToolCallStarted(
+                        index=index,
+                        id=tool_blocks[index]["id"],
+                        name=tool_blocks[index]["name"],
+                    )
+                    continue
 
-            delta_event = event.get("contentBlockDelta", {})
-            delta = delta_event.get("delta", {})
-            if "text" in delta:
-                text_parts.append(delta["text"])
-                yield delta["text"]
-            if "toolUse" in delta:
-                index = delta_event.get("contentBlockIndex", 0)
-                current = tool_blocks.setdefault(
-                    index,
-                    {"id": f"bedrock_tool_{uuid.uuid4().hex}", "name": "", "input": ""},
-                )
-                current["input"] += delta["toolUse"].get("input", "")
+                delta_event = event.get("contentBlockDelta", {})
+                delta = delta_event.get("delta", {})
+                if "text" in delta:
+                    text_parts.append(delta["text"])
+                    yield delta["text"]
+                if "toolUse" in delta:
+                    index = delta_event.get("contentBlockIndex", 0)
+                    current = tool_blocks.setdefault(
+                        index,
+                        {"id": f"bedrock_tool_{uuid.uuid4().hex}", "name": "", "input": ""},
+                    )
+                    current["input"] += delta["toolUse"].get("input", "")
+        finally:
+            await events.aclose()
 
         if tool_blocks:
             tool_calls = []
