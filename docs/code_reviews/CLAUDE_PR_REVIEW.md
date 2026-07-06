@@ -101,7 +101,18 @@ Review loop for a PR:
 
 A repository admin enables branch protection on `main` requiring the
 `verify-claude-review` status. Branch protection on **public** repositories is
-available on GitHub's Free plan:
+available on GitHub's Free plan.
+
+> ⚠️ `PUT .../branches/main/protection` **replaces the entire** protection
+> config — every field you omit is cleared. `main` currently has no protection,
+> so the command below is safe to apply as-is. If protection **already exists**,
+> do not blind-`PUT`: `GET` the current settings, merge in the
+> `verify-claude-review` check, and `PUT` the merged object, or you will silently
+> drop existing required checks and review rules.
+
+The recommended full config below requires the status check **and** Code Owner
+review (so a PR cannot quietly weaken the gate's own files — see the CODEOWNERS
+note after). This is a complete config, self-consistent with everything above:
 
 ```bash
 gh api -X PUT repos/KestrelSovereignAI/kestrel-llms/branches/main/protection \
@@ -113,19 +124,24 @@ gh api -X PUT repos/KestrelSovereignAI/kestrel-llms/branches/main/protection \
     "checks": [{"context": "verify-claude-review"}]
   },
   "enforce_admins": false,
-  "required_pull_request_reviews": null,
+  "required_pull_request_reviews": {
+    "require_code_owner_reviews": true,
+    "required_approving_review_count": 1
+  },
   "restrictions": null
 }
 JSON
 ```
 
-Set `"enforce_admins": true` to hold maintainers to the same gate. Leave it
-`false` to keep an admin escape hatch for emergency fixes.
+For status-check enforcement only (no required PR approval), set
+`"required_pull_request_reviews": null`. Set `"enforce_admins": true` to hold
+maintainers to the same gate; leave it `false` to keep an admin escape hatch for
+emergency fixes.
 
 Defense in depth: `.github/CODEOWNERS` assigns the gate's own files (workflow,
-verifier, this policy) to a maintainer. Enable *Require review from Code Owners*
-in branch protection so a PR cannot quietly weaken the gate without a maintainer
-signing off — the `pull_request_target` trusted-base design already prevents a
-PR from bypassing the check at runtime; CODEOWNERS covers changes that land the
-weakening into `main` itself.
+verifier, this policy) to a maintainer, so the `require_code_owner_reviews`
+setting above forces a maintainer sign-off on any change to them. The
+`pull_request_target` trusted-base design already prevents a PR from bypassing
+the check at *runtime*; CODEOWNERS covers changes that would land the weakening
+into `main` itself.
 
