@@ -32,6 +32,9 @@ jobs:
       - name: Check out PR head as data only
         uses: actions/checkout@v4
         with:
+          # Fork heads live in the fork repo, not the base — check out from there
+          # or the fork-only SHA is unresolvable. Data only: nothing here runs.
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           path: pr
           persist-credentials: false
