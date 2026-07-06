@@ -34,6 +34,12 @@ gh pr view "$pr" --json body --jq '.body // ""' > "$tmpdir/body.md"
 
 out="docs/code_reviews/claude-pr-${number}.md"
 
+# Build the artifact in $tmpdir and only move it into place once Claude has
+# produced a non-empty body. A failed/aborted review must never leave a
+# passing-but-empty artifact behind (the gate checks for substance).
+staged="$tmpdir/review.md"
+body="$tmpdir/review-body.md"
+
 {
   echo "# Claude Review: PR #${number}"
   echo
@@ -44,7 +50,7 @@ out="docs/code_reviews/claude-pr-${number}.md"
   echo "- Head: ${head}"
   echo "- Reviewed: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo
-} > "$out"
+} > "$staged"
 
 {
   cat <<PROMPT
@@ -77,6 +83,16 @@ PROMPT
 } | claude -p \
   --permission-mode dontAsk \
   --allowedTools "" \
-  --max-budget-usd 2 >> "$out"
+  --max-budget-usd 2 > "$body"
+
+# Refuse to publish an empty/whitespace-only review — that would sail through
+# the gate as a green "review done" while proving nothing.
+if [[ ! -s "$body" ]] || ! grep -q '[^[:space:]]' "$body"; then
+  echo "claude -p produced no review body; artifact not written." >&2
+  exit 1
+fi
+
+cat "$body" >> "$staged"
+mv "$staged" "$out"
 
 echo "Claude review written to $out"

@@ -58,12 +58,27 @@ artifact was committed.
 ### What CI verifies
 
 `.github/workflows/claude-review-gate.yml` runs on `pull_request` with
-`permissions: contents: read`. It checks out the PR head and asserts that
-`docs/code_reviews/claude-pr-<PR>.md` exists, has the exact
-`# Claude Review: PR #<PR>` header, and links this PR's URL. It reads one
-markdown file — it never executes checked-out code and needs no secrets, so it
-runs safely on fork PRs. The check is red until the artifact is pushed; it going
-green *is* the signal that the review was performed.
+`permissions: contents: read`. It runs `scripts/verify_claude_review.sh <PR>`,
+which asserts that `docs/code_reviews/claude-pr-<PR>.md` exists, has the exact
+`# Claude Review: PR #<PR>` header, links this PR's URL, and carries a
+**substantive body** (at least `MIN_BODY_LINES` of non-metadata content, so an
+empty or truncated stub fails). It reads one markdown file — it never executes
+checked-out code and needs no secrets, so it runs safely on fork PRs. A second
+job runs `tests/gate/test_verify_claude_review.sh` so the gate logic itself is
+covered.
+
+Honesty about what green means: the check proves *a substantive review artifact
+was committed for this PR* — not that a genuine review occurred. CI deliberately
+never runs Claude (see below), so it cannot attest to the content's quality; a
+determined author could paste arbitrary text. It stops the common failure modes
+— no artifact, wrong PR, and empty/truncated output — not deliberate forgery.
+The evidence trail (a committed, reviewable artifact per PR) is the guarantee;
+review integrity remains the maintainer's responsibility.
+
+`scripts/claude_pr_review.sh` writes the artifact atomically: it stages the
+review in a temp file and only moves it into place after `claude -p` produces a
+non-empty body, so an aborted or budget-exhausted run never leaves a
+passing-but-empty file behind.
 
 Review loop for a PR:
 

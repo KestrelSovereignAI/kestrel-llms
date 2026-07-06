@@ -3,14 +3,19 @@ name: Claude Review Gate
 # Enforces the Claude CLI PR review policy (docs/code_reviews/CLAUDE_PR_REVIEW.md)
 # WITHOUT running Claude in CI. The review runs locally on a maintainer's machine
 # via scripts/claude_pr_review.sh; this job only verifies that the resulting
-# evidence artifact was committed to the PR. It reads a single markdown file and
-# never executes checked-out code, so it needs no secrets and is safe on fork PRs.
+# evidence artifact was committed and carries a substantive body. It reads a
+# single markdown file and never executes checked-out code, so it needs no
+# secrets and is safe on fork PRs (no ANTHROPIC_API_KEY exposure).
 
 on:
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: claude-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   verify-claude-review:
@@ -22,27 +27,13 @@ jobs:
       - name: Verify Claude review artifact is present
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          set -euo pipefail
-          file="docs/code_reviews/claude-pr-${PR_NUMBER}.md"
+        run: scripts/verify_claude_review.sh "${PR_NUMBER}"
 
-          if [[ ! -f "$file" ]]; then
-            echo "::error::Missing Claude review artifact: ${file}"
-            echo "Run 'scripts/claude_pr_review.sh ${PR_NUMBER}' locally, then commit ${file}."
-            echo "See docs/code_reviews/CLAUDE_PR_REVIEW.md for the review policy."
-            exit 1
-          fi
+  test-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
 
-          # Header must name this exact PR (guards against copying a stale review).
-          if ! grep -qx "# Claude Review: PR #${PR_NUMBER}" "$file"; then
-            echo "::error::${file} header must be exactly '# Claude Review: PR #${PR_NUMBER}'"
-            exit 1
-          fi
-
-          # Body must link back to this PR's canonical URL.
-          if ! grep -q "/pull/${PR_NUMBER}\b" "$file"; then
-            echo "::error::${file} must reference this PR's URL (.../pull/${PR_NUMBER})"
-            exit 1
-          fi
-
-          echo "OK: Claude review artifact present and matches PR #${PR_NUMBER}: ${file}"
+      - name: Test the verify script
+        run: tests/gate/test_verify_claude_review.sh
