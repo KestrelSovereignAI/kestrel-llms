@@ -1,0 +1,23 @@
+name: Gate Tests
+
+# Runs the review-gate verifier's own fixture tests against the PR HEAD version,
+# so a PR that breaks scripts/verify_claude_review.sh is caught before it lands
+# and jams the required Claude Review Gate for everyone. This runs on
+# pull_request (head code) — safe because the tests only exercise the verifier
+# against local fixtures: no secrets, no network, contents:read.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-verifier:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR head
+        uses: actions/checkout@v4
+
+      - name: Test the verify script (PR-head version)
+        run: tests/gate/test_verify_claude_review.sh

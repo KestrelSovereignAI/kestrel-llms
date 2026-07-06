@@ -61,8 +61,10 @@ artifact was committed.
 <PR>`, which asserts that `docs/code_reviews/claude-pr-<PR>.md` exists, has the
 exact `# Claude Review: PR #<PR>` header, links this PR's URL, and carries a
 **substantive body** (at least `MIN_BODY_LINES` of non-metadata content, so an
-empty or truncated stub fails). A second job runs
-`tests/gate/test_verify_claude_review.sh` so the gate logic itself is covered.
+empty or truncated stub fails). The gate logic itself is covered by
+`tests/gate/test_verify_claude_review.sh`, run against the PR-head version by a
+separate `pull_request` workflow (`.github/workflows/gate-tests.yml`) so a PR
+that breaks the verifier is caught before it can land and jam the gate.
 
 The workflow triggers on `pull_request_target`, so the workflow file *and* the
 verifier run from the **trusted base ref** — a PR cannot edit the workflow or

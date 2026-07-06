@@ -43,12 +43,3 @@ jobs:
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: scripts/verify_claude_review.sh "${PR_NUMBER}" pr/docs/code_reviews
-
-  test-gate:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out base ref (trusted)
-        uses: actions/checkout@v4
-
-      - name: Test the verify script
-        run: tests/gate/test_verify_claude_review.sh
