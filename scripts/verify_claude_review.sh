@@ -37,8 +37,10 @@ if [[ ! -f "$file" ]]; then
 fi
 
 # Header must name this exact PR (guards against copying a stale review).
-if ! grep -qx "# Claude Review: PR #${pr}" "$file"; then
-  echo "::error::${file} header must be exactly '# Claude Review: PR #${pr}'"
+# Tolerate trailing whitespace / a CR (CRLF-committed artifact) so the failure
+# mode is "wrong PR", not a baffling exact-match miss on an invisible \r.
+if ! grep -qE "^# Claude Review: PR #${pr}[[:space:]]*$" "$file"; then
+  echo "::error::${file} header must be '# Claude Review: PR #${pr}'"
   exit 1
 fi
 

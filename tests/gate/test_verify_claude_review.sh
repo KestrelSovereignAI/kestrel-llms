@@ -91,8 +91,29 @@ fi
 } > "$reviews/claude-pr-1.md"
 run 1 1 "url boundary rejects /pull/13 for PR #1"
 
-# 7. non-numeric PR arg → 2
+# 7. MIN_BODY_LINES boundary: 7 body lines fails, 8 passes (default cutoff is 8).
+body_artifact() { # <pr> <n-body-lines>
+  local pr="$1" n="$2"
+  {
+    echo "# Claude Review: PR #${pr}"
+    echo
+    echo "- PR: https://github.com/KestrelSovereignAI/kestrel-llms/pull/${pr}"
+    echo
+    for ((i = 1; i <= n; i++)); do echo "body ${i}"; done
+  } > "$reviews/claude-pr-${pr}.md"
+}
+body_artifact 30 7
+run 1 30 "7 body lines fails (< MIN_BODY_LINES=8)"
+body_artifact 31 8
+run 0 31 "8 body lines passes (== MIN_BODY_LINES=8)"
+
+# 8. non-numeric PR arg → 2
 run 2 abc "non-numeric pr arg errors"
+
+# 9. CRLF header still matches (tolerates trailing \r).
+body_artifact 32 10
+sed -i.bak 's/$/\r/' "$reviews/claude-pr-32.md" && rm -f "$reviews/claude-pr-32.md.bak"
+run 0 32 "CRLF-committed artifact still passes"
 
 echo
 echo "passed=$pass failed=$fail"

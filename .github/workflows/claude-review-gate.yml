@@ -23,6 +23,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The job id IS the required-status-check context. It is hardcoded as
+  # {"context": "verify-claude-review"} in the branch-protection command in
+  # docs/code_reviews/CLAUDE_PR_REVIEW.md — do NOT add a `name:` or rename this
+  # job without updating that command, or the required check silently stops
+  # reporting and every PR blocks on a check that never runs.
   verify-claude-review:
     runs-on: ubuntu-latest
     steps:

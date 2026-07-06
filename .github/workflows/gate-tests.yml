@@ -5,6 +5,10 @@ name: Gate Tests
 # and jams the required Claude Review Gate for everyone. This runs on
 # pull_request (head code) — safe because the tests only exercise the verifier
 # against local fixtures: no secrets, no network, contents:read.
+#
+# DO NOT add secrets or write permissions to this workflow. It runs PR-head
+# code on `pull_request`; granting it secrets/write would turn it into a
+# pwn-request vector for fork PRs.
 
 on:
   pull_request:
