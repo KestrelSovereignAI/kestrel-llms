@@ -57,15 +57,23 @@ artifact was committed.
 
 ### What CI verifies
 
-`.github/workflows/claude-review-gate.yml` runs on `pull_request` with
-`permissions: contents: read`. It runs `scripts/verify_claude_review.sh <PR>`,
-which asserts that `docs/code_reviews/claude-pr-<PR>.md` exists, has the exact
-`# Claude Review: PR #<PR>` header, links this PR's URL, and carries a
+`.github/workflows/claude-review-gate.yml` runs `scripts/verify_claude_review.sh
+<PR>`, which asserts that `docs/code_reviews/claude-pr-<PR>.md` exists, has the
+exact `# Claude Review: PR #<PR>` header, links this PR's URL, and carries a
 **substantive body** (at least `MIN_BODY_LINES` of non-metadata content, so an
-empty or truncated stub fails). It reads one markdown file — it never executes
-checked-out code and needs no secrets, so it runs safely on fork PRs. A second
-job runs `tests/gate/test_verify_claude_review.sh` so the gate logic itself is
-covered.
+empty or truncated stub fails). A second job runs
+`tests/gate/test_verify_claude_review.sh` so the gate logic itself is covered.
+
+The workflow triggers on `pull_request_target`, so the workflow file *and* the
+verifier run from the **trusted base ref** — a PR cannot edit the workflow or
+`verify_claude_review.sh` in its own head to force the gate green (a real
+bypass, since with a plain `pull_request` trigger everything runs from the PR
+head). The PR head is checked out into `./pr` as **data only**: the verifier
+reads one markdown file with `grep` and never executes anything from the head
+checkout. `permissions` is `contents: read` and no secrets are referenced, so
+`pull_request_target` here carries none of its usual "pwn request" risk. Because
+`pull_request_target` uses the base-branch workflow, the gate applies to PRs
+opened *after* this workflow lands on `main`.
 
 Honesty about what green means: the check proves *a substantive review artifact
 was committed for this PR* — not that a genuine review occurred. CI deliberately
@@ -111,4 +119,11 @@ JSON
 
 Set `"enforce_admins": true` to hold maintainers to the same gate. Leave it
 `false` to keep an admin escape hatch for emergency fixes.
+
+Defense in depth: `.github/CODEOWNERS` assigns the gate's own files (workflow,
+verifier, this policy) to a maintainer. Enable *Require review from Code Owners*
+in branch protection so a PR cannot quietly weaken the gate without a maintainer
+signing off — the `pull_request_target` trusted-base design already prevents a
+PR from bypassing the check at runtime; CODEOWNERS covers changes that land the
+weakening into `main` itself.
 

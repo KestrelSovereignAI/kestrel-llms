@@ -3,12 +3,17 @@ name: Claude Review Gate
 # Enforces the Claude CLI PR review policy (docs/code_reviews/CLAUDE_PR_REVIEW.md)
 # WITHOUT running Claude in CI. The review runs locally on a maintainer's machine
 # via scripts/claude_pr_review.sh; this job only verifies that the resulting
-# evidence artifact was committed and carries a substantive body. It reads a
-# single markdown file and never executes checked-out code, so it needs no
-# secrets and is safe on fork PRs (no ANTHROPIC_API_KEY exposure).
+# evidence artifact was committed and carries a substantive body.
+#
+# Trigger is pull_request_target, so the workflow AND the verifier run from the
+# TRUSTED base ref — a PR cannot edit scripts/verify_claude_review.sh or this
+# file in its head to bypass its own gate. The PR head is checked out into ./pr
+# as DATA ONLY: the verifier reads one markdown file with `grep` and never
+# executes anything from the head checkout. permissions is contents:read and no
+# secrets are referenced, so nothing sensitive is exposed to fork PR content.
 
 on:
-  pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
@@ -21,18 +26,25 @@ jobs:
   verify-claude-review:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out PR head
+      - name: Check out base ref (trusted verifier)
         uses: actions/checkout@v4
 
-      - name: Verify Claude review artifact is present
+      - name: Check out PR head as data only
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+
+      - name: Verify Claude review artifact from PR head
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: scripts/verify_claude_review.sh "${PR_NUMBER}"
+        run: scripts/verify_claude_review.sh "${PR_NUMBER}" pr/docs/code_reviews
 
   test-gate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out PR head
+      - name: Check out base ref (trusted)
         uses: actions/checkout@v4
 
       - name: Test the verify script
