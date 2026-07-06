@@ -64,7 +64,10 @@ exact `# Claude Review: PR #<PR>` header, links this PR's URL, and carries a
 empty or truncated stub fails). The gate logic itself is covered by
 `tests/gate/test_verify_claude_review.sh`, run against the PR-head version by a
 separate `pull_request` workflow (`.github/workflows/gate-tests.yml`) so a PR
-that breaks the verifier is caught before it can land and jam the gate.
+that breaks the verifier surfaces before merge. This test job is informational
+(not a required check) and runs the PR-head test script, so it does not *enforce*
+gate integrity — the trusted-base `verify-claude-review` job does that; it just
+gives early signal that a verifier change is broken.
 
 The workflow triggers on `pull_request_target`, so the workflow file *and* the
 verifier run from the **trusted base ref** — a PR cannot edit the workflow or
