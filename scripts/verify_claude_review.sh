@@ -52,9 +52,12 @@ fi
 # Substance check: strip the header line, the '- Key:' metadata block, and blank
 # lines, then require at least MIN_BODY_LINES of real content. A failed local
 # review that left only the metadata header will have zero and fail here.
+# `|| true`: when grep -v selects zero lines it exits 1; without this the
+# command substitution would trip `set -e` and abort before the friendly
+# diagnostic below can print.
 body_lines="$(
-  grep -vE '^# Claude Review: PR #|^- (PR|Title|Author|Base|Head|Reviewed):|^[[:space:]]*$' "$file" \
-    | wc -l | tr -d '[:space:]'
+  { grep -vE '^# Claude Review: PR #|^- (PR|Title|Author|Base|Head|Reviewed):|^[[:space:]]*$' "$file" \
+    | wc -l | tr -d '[:space:]'; } || true
 )"
 if (( body_lines < MIN_BODY_LINES )); then
   echo "::error::${file} has only ${body_lines} body line(s); need >= ${MIN_BODY_LINES}."

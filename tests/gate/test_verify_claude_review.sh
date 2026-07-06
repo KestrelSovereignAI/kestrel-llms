@@ -61,7 +61,8 @@ good_artifact 22 22
 grep -v '/pull/' "$reviews/claude-pr-22.md" > "$reviews/claude-pr-22.md.tmp" && mv "$reviews/claude-pr-22.md.tmp" "$reviews/claude-pr-22.md"
 run 1 22 "missing PR url fails"
 
-# 5. empty body (header + metadata only) → 1
+# 5. empty body (header + metadata only) → 1, AND prints the friendly diagnostic
+#    (not a bare set -e abort).
 {
   echo "# Claude Review: PR #23"
   echo
@@ -70,6 +71,14 @@ run 1 22 "missing PR url fails"
   echo
 } > "$reviews/claude-pr-23.md"
 run 1 23 "empty-body stub fails"
+out23="$("$verify" 23 "$reviews" 2>&1 || true)"
+if grep -q "body line(s)" <<<"$out23"; then
+  echo "ok   - empty-body stub prints the actionable diagnostic"
+  pass=$((pass + 1))
+else
+  echo "FAIL - empty-body stub aborted before its diagnostic: ${out23}"
+  fail=$((fail + 1))
+fi
 
 # 6. url boundary: PR #1 must not be satisfied by a /pull/13 link → 1
 {
