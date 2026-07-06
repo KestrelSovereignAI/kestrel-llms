@@ -1,0 +1,52 @@
+name: Claude Review Gate
+
+# Enforces the Claude CLI PR review policy (docs/code_reviews/CLAUDE_PR_REVIEW.md)
+# WITHOUT running Claude in CI. The review runs locally on a maintainer's machine
+# via scripts/claude_pr_review.sh; this job only verifies that the resulting
+# evidence artifact was committed and carries a substantive body.
+#
+# Trigger is pull_request_target, so the workflow AND the verifier run from the
+# TRUSTED base ref — a PR cannot edit scripts/verify_claude_review.sh or this
+# file in its head to bypass its own gate. The PR head is checked out into ./pr
+# as DATA ONLY: the verifier reads one markdown file with `grep` and never
+# executes anything from the head checkout. permissions is contents:read and no
+# secrets are referenced, so nothing sensitive is exposed to fork PR content.
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # The job id IS the required-status-check context. It is hardcoded as
+  # {"context": "verify-claude-review"} in the branch-protection command in
+  # docs/code_reviews/CLAUDE_PR_REVIEW.md — do NOT add a `name:` or rename this
+  # job without updating that command, or the required check silently stops
+  # reporting and every PR blocks on a check that never runs.
+  verify-claude-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out base ref (trusted verifier)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out PR head as data only
+        uses: actions/checkout@v4
+        with:
+          # Fork heads live in the fork repo, not the base — check out from there
+          # or the fork-only SHA is unresolvable. Data only: nothing here runs.
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+          persist-credentials: false
+
+      - name: Verify Claude review artifact from PR head
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: scripts/verify_claude_review.sh "${PR_NUMBER}" pr/docs/code_reviews
