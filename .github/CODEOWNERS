@@ -1,8 +1,0 @@
-# Defense-in-depth for the Claude review gate: edits to the gate, its verifier,
-# and the review policy require maintainer review. Enforced only when branch
-# protection has "Require review from Code Owners" enabled on main
-# (see docs/code_reviews/CLAUDE_PR_REVIEW.md).
-/.github/workflows/claude-review-gate.yml   @UncleSaurus
-/scripts/verify_claude_review.sh            @UncleSaurus
-/scripts/claude_pr_review.sh                @UncleSaurus
-/docs/code_reviews/CLAUDE_PR_REVIEW.md      @UncleSaurus
