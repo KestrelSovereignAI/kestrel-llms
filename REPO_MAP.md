@@ -15,10 +15,10 @@ commits only when the tree actually changes; `git log REPO_MAP.md` has the date.
 
 Repo entry points and standard project files.
 
-- **.gitignore** — —
+- **README.md** — Kestrel LLM Provider Monorepo — This directory is the seed for the future `KestrelSovereignAI/kestrel-llms` monorepo: one repository, many independently published provider packages.
 - **AGENTS.md** — kestrel-llms — Agent Instructions — See [README.md](README.md) for the monorepo overview and package table.
 - **LICENSE** — —
-- **README.md** — Kestrel LLM Provider Monorepo — This directory is the seed for the future `KestrelSovereignAI/kestrel-llms` monorepo: one repository, many independently published provider packages.
+- **.gitignore** — —
 - **REPO_MAP.md** — kestrel-llms — Repo Map — Auto-generated file-tree + per-file purpose index.
 - **pyproject.toml** — (configuration)
 
