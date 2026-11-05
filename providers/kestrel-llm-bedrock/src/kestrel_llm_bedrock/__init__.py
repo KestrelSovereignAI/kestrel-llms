@@ -541,6 +541,7 @@ class BedrockAdapter(LLMAdapter):
                 "Uses AWS Bedrock Runtime Converse APIs.",
                 "Feature support depends on the selected Bedrock model family.",
                 "Structured output is implemented with a forced Bedrock tool call.",
+                "Structured output requires the non-streaming method.",
             ),
         )
 
@@ -668,7 +669,8 @@ class BedrockAdapter(LLMAdapter):
         tool_calls = []
         for current in tool_blocks.values():
             try:
-                arguments = json.loads(current["input"])
+                # A native zero-argument tool block need not carry input deltas.
+                arguments = json.loads(current["input"]) if current["input"] else {}
             except json.JSONDecodeError as error:
                 raise LLMProtocolError("Bedrock tool arguments must contain valid JSON.") from error
             tool_calls.append(_tool_call(current["id"], current["name"], arguments))

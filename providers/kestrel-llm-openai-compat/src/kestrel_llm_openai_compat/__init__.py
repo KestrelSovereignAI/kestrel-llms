@@ -291,7 +291,8 @@ async def stream_with_tool_calls(
 
     parsed_tool_calls = []
     for current in tool_calls.values():
-        parsed_tool_calls.append(_tool_call(current["id"], current["name"], current["arguments"]))
+        # Native streams may finish a zero-argument call without JSON deltas.
+        parsed_tool_calls.append(_tool_call(current["id"], current["name"], current["arguments"] or "{}"))
     yield LLMResponse(
         content=text_content or None, tool_calls=parsed_tool_calls or None,
         raw={"reasoning_content": reasoning_content} if reasoning_content else None,

@@ -54,7 +54,7 @@ async def test_native_usage_trailers_and_repeated_reason_do_not_erase_stop(nativ
     [chunk({}, reason="length"), chunk({}, reason="stop")],
     [chunk({}, reason="stop"), chunk({"content": "trailing"})],
     [chunk({}, reason="stop"), chunk({"reasoning_content": "trailing"})],
-    [chunk({}, reason="stop"), chunk({"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]})],
+    [chunk({}, reason="stop"), chunk({"tool_calls": [{"index": 0, "id": "owned", "function": {"name": "write", "arguments": "{}"}}]})],
     [chunk({"content": "alternative"}, index=1)],
     [chunk({}, reason=17)],
     [chunk({}, reason="")],

@@ -16,6 +16,38 @@ from completion_peer import chunk, openai_response, owned_client, owned_bedrock_
 ADAPTERS = [DeepSeekAdapter, XAIAdapter, KimiAdapter]
 
 
+@pytest.mark.parametrize("adapter_type", ADAPTERS)
+@pytest.mark.parametrize("empty_fragment", [False, True])
+async def test_openai_native_zero_argument_stream_is_an_empty_object(native_peer, adapter_type, empty_fragment):
+    function = {"name": "no_arguments"}
+    if empty_fragment:
+        function["arguments"] = ""
+    frames = [chunk({"tool_calls": [{"index": 0, "id": "owned", "type": "function", "function": function}]}),
+              chunk({}, reason="tool_calls")]
+    with native_peer(frames) as peer:
+        async with owned_client(peer) as client:
+            result = await drain_streaming_with_tools(adapter_type().get_streaming_response_with_tools(client, "owned-model", []))
+            call, = result.final_response.tool_calls
+            assert (call.id, call.name, call.arguments) == ("owned", "no_arguments", {})
+            assert result.final_response.stop_reason == "tool_calls"
+            assert peer.responses and all(response.is_closed for response in peer.responses)
+
+
+@pytest.mark.parametrize("empty_fragment", [False, True])
+async def test_bedrock_native_zero_argument_stream_is_an_empty_object(native_peer, empty_fragment):
+    frames = [{"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "owned", "name": "no_arguments"}}}}]
+    if empty_fragment:
+        frames.append({"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {"input": ""}}}})
+    frames.extend([{"contentBlockStop": {"contentBlockIndex": 0}}, {"messageStop": {"stopReason": "tool_use"}}])
+    with native_peer(frames, wire="bedrock") as peer:
+        async with owned_bedrock_client(peer) as client:
+            result = await drain_streaming_with_tools(BedrockAdapter().get_streaming_response_with_tools(client, "owned-model", [{"role": "user", "content": "owned"}]))
+            call, = result.final_response.tool_calls
+            assert (call.id, call.name, call.arguments) == ("owned", "no_arguments", {})
+            assert result.final_response.stop_reason == "tool_use"
+            assert peer.raw_responses and all(response.closed for response in peer.raw_responses)
+
+
 def openai_tool_frames(call_id, name, arguments, streaming):
     call = {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
     if streaming:
@@ -31,7 +63,6 @@ def openai_tool_frames(call_id, name, arguments, streaming):
     ("", "write", "{}"), ("owned", "", "{}"),
     ("owned", "write", "[]"), ("owned", "write", "null"),
     ("owned", "write", '"text"'), ("owned", "write", "{"),
-    ("owned", "write", ""),
 ])
 async def test_openai_native_malformed_tool_calls_never_complete(native_peer, adapter_type, streaming, call_id, name, arguments):
     observed = []
@@ -102,7 +133,7 @@ async def test_bedrock_native_missing_identity_is_not_invented(native_peer, call
                 await BedrockAdapter().get_response(client, "owned-model", [{"role": "user", "content": "owned"}])
 
 
-@pytest.mark.parametrize("arguments", ["{", ""])
+@pytest.mark.parametrize("arguments", ["{"])
 async def test_bedrock_native_invalid_json_does_not_become_raw_arguments(native_peer, arguments):
     frames = [
         {"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "owned", "name": "write"}}}},
@@ -113,6 +144,14 @@ async def test_bedrock_native_invalid_json_does_not_become_raw_arguments(native_
         async with owned_bedrock_client(peer) as client:
             with pytest.raises(LLMProtocolError):
                 _ = [item async for item in BedrockAdapter().get_streaming_response_with_tools(client, "owned-model", [{"role": "user", "content": "owned"}])]
+
+
+@pytest.mark.parametrize("adapter_type", ADAPTERS)
+async def test_openai_native_nonstream_empty_json_is_refused(native_peer, adapter_type):
+    with native_peer(openai_tool_frames("owned", "write", "", False)) as peer:
+        async with owned_client(peer) as client:
+            with pytest.raises(LLMProtocolError, match="valid JSON"):
+                await adapter_type().get_response(client, "owned-model", [])
 
 
 @pytest.mark.parametrize("adapter_type", ADAPTERS)

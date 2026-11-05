@@ -62,6 +62,11 @@ streaming rejects requested or returned tool calls. Vertex tool streaming keeps
 its advertised non-streaming handoff; Bedrock streaming does not support schema
 projection and refuses it before sending a request.
 
+Bedrock's non-streaming schema projection keeps the native `tool_use` stop
+reason and usage while returning the assembled object as content. Native
+streams can complete zero-argument calls without argument fragments; those
+calls carry `{}`. Nonempty malformed JSON and non-object arguments fail.
+
 Cancelling a Bedrock stream waits for the native read in progress before it
 returns. On Windows that read may wait for further wire data or botocore's
 read timeout (60 seconds by default). The original read stays owned until it
