@@ -69,7 +69,8 @@ with `await info.client.close()` when the provider is retired. Vertex accepts
 `base_url` and `api_version`; Bedrock accepts `endpoint_url` and `ca_bundle` for
 custom endpoints. Automatic Google client-certificate mTLS is refused in Vertex
 project mode because the owned HTTP transport cannot perform that SDK endpoint
-switch. API-key mode does not use that switch.
+switch. API-key mode explicitly selects the Gemini API, so ambient Google SDK
+mode variables cannot silently change its endpoint or certificate behavior.
 
 ## Verification
 

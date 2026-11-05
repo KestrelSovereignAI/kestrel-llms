@@ -112,7 +112,7 @@ def _client_from_config(config: Dict[str, Any]) -> VertexClient:
             "GOOGLE_CLOUD_PROJECT, GCP_PROJECT_ID, or credentials with project_id"
         )
 
-    client_kwargs: Dict[str, Any] = {"api_key": api_key} if api_key else {
+    client_kwargs: Dict[str, Any] = {"api_key": api_key, "vertexai": False} if api_key else {
         "vertexai": True,
         "project": project_id,
         "location": config.get("location")

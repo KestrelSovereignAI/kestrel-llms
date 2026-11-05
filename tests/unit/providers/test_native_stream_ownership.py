@@ -140,12 +140,21 @@ async def test_vertex_automatic_mtls_is_refused(monkeypatch):
         VertexAIAdapter.create_provider({"project_id": "owned-project"})
 
 
-async def test_vertex_api_key_mode_does_not_use_automatic_mtls(native_peer, monkeypatch):
+@pytest.mark.parametrize("mode_variable", [None, "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE"])
+async def test_vertex_api_key_mode_does_not_use_automatic_mtls(native_peer, monkeypatch, mode_variable):
     monkeypatch.setenv("GOOGLE_API_USE_CLIENT_CERTIFICATE", "true")
-    with native_peer([], wire="vertex") as peer:
+    for variable in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE"):
+        monkeypatch.delenv(variable, raising=False)
+    if mode_variable is not None:
+        monkeypatch.setenv(mode_variable, "true")
+    with native_peer(frames("vertex"), wire="vertex") as peer:
         async with owned_vertex_client(peer) as client:
+            assert client.genai.vertexai is False
             assert not client.http.is_closed
-        assert client.http.is_closed and peer.calls == []
+            items = [item async for item in VertexAIAdapter().get_streaming_response(client, "owned-model", MESSAGES)]
+            assert items[0] == "partial" and items[-1].stop_reason == "STOP"
+            assert peer.responses and all(response.is_closed for response in peer.responses)
+        assert client.http.is_closed and len(peer.calls) == 1
 
 
 async def test_owned_vertex_client_closes_its_transport(native_peer):
