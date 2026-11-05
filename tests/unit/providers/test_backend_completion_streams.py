@@ -162,3 +162,23 @@ async def test_backend_plain_requested_tools_are_refused_before_wire(native_peer
                     async for _ in BedrockAdapter().get_streaming_response(client, "owned-model", [], tools=[{}]):
                         pass
         assert peer.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("frames", [
+    [{"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"toolUse": {"input": "{}"}}}}],
+    [{"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "owned", "name": "write"}}}}] * 2,
+    [{"contentBlockStart": {"start": {"toolUse": {"toolUseId": "owned", "name": "write"}}}}],
+    [{"contentBlockStart": {"contentBlockIndex": -1, "start": {"toolUse": {"toolUseId": "owned", "name": "write"}}}}],
+    [{"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {"name": "write"}}}}],
+    [{"contentBlockStart": {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "owned"}}}}],
+])
+async def test_bedrock_native_tool_blocks_reject_missing_or_duplicate_start(native_peer, frames):
+    observed = []
+    with native_peer(frames, wire="bedrock") as peer:
+        async with owned_bedrock_client(peer) as client:
+            with pytest.raises(LLMProtocolError):
+                async for item in BedrockAdapter().get_streaming_response_with_tools(client, "owned-model", [{"role": "user", "content": "owned"}]):
+                    observed.append(item)
+            assert not any(isinstance(item, LLMResponse) for item in observed)
+            assert peer.raw_responses and all(response.closed for response in peer.raw_responses)

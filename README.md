@@ -67,8 +67,9 @@ response on plain streams and use the client returned by `create_provider` for
 Vertex and Bedrock operations, including model discovery. Close those clients
 with `await info.client.close()` when the provider is retired. Vertex accepts
 `base_url` and `api_version`; Bedrock accepts `endpoint_url` and `ca_bundle` for
-custom endpoints. Automatic Google client-certificate mTLS is refused because
-the explicitly owned HTTP transport cannot perform that SDK endpoint switch.
+custom endpoints. Automatic Google client-certificate mTLS is refused in Vertex
+project mode because the owned HTTP transport cannot perform that SDK endpoint
+switch. API-key mode does not use that switch.
 
 ## Verification
 

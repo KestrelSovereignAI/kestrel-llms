@@ -624,11 +624,15 @@ class BedrockAdapter(LLMAdapter):
 
                 start = event.get("contentBlockStart", {}).get("start", {})
                 if "toolUse" in start:
-                    index = event["contentBlockStart"].get("contentBlockIndex", len(tool_blocks))
+                    index = event["contentBlockStart"].get("contentBlockIndex")
+                    if type(index) is not int or index < 0 or index in tool_blocks:
+                        raise LLMProtocolError("Bedrock tool block requires a new non-negative integer index.")
                     tool_use = start["toolUse"]
+                    if any(type(tool_use.get(key)) is not str or not tool_use[key] for key in ("toolUseId", "name")):
+                        raise LLMProtocolError("Bedrock tool block requires its native id and name.")
                     tool_blocks[index] = {
-                        "id": tool_use.get("toolUseId") or f"bedrock_tool_{uuid.uuid4().hex}",
-                        "name": tool_use.get("name") or "",
+                        "id": tool_use["toolUseId"],
+                        "name": tool_use["name"],
                         "input": "",
                     }
                     yield ToolCallStarted(
@@ -644,11 +648,10 @@ class BedrockAdapter(LLMAdapter):
                     text_parts.append(delta["text"])
                     yield delta["text"]
                 if "toolUse" in delta:
-                    index = delta_event.get("contentBlockIndex", 0)
-                    current = tool_blocks.setdefault(
-                        index,
-                        {"id": f"bedrock_tool_{uuid.uuid4().hex}", "name": "", "input": ""},
-                    )
+                    index = delta_event.get("contentBlockIndex")
+                    if type(index) is not int or index not in tool_blocks:
+                        raise LLMProtocolError("Bedrock tool delta requires an existing native tool block.")
+                    current = tool_blocks[index]
                     current["input"] += delta["toolUse"].get("input", "")
 
         tool_calls = []

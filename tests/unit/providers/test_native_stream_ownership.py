@@ -134,8 +134,18 @@ async def test_wrong_client_is_refused_before_wire(native_peer, backend, operati
 
 async def test_vertex_automatic_mtls_is_refused(monkeypatch):
     monkeypatch.setenv("GOOGLE_API_USE_CLIENT_CERTIFICATE", "true")
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="mTLS"):
-        VertexAIAdapter.create_provider({"api_key": "owned-test"})
+        VertexAIAdapter.create_provider({"project_id": "owned-project"})
+
+
+async def test_vertex_api_key_mode_does_not_use_automatic_mtls(native_peer, monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_USE_CLIENT_CERTIFICATE", "true")
+    with native_peer([], wire="vertex") as peer:
+        async with owned_vertex_client(peer) as client:
+            assert not client.http.is_closed
+        assert client.http.is_closed and peer.calls == []
 
 
 async def test_owned_vertex_client_closes_its_transport(native_peer):

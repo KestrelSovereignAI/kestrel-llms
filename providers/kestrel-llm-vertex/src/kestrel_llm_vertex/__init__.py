@@ -132,7 +132,7 @@ def _client_from_config(config: Dict[str, Any]) -> VertexClient:
     from google.auth.transport import mtls
     from google.genai.types import HttpOptions
 
-    if mtls.should_use_client_cert():
+    if not api_key and mtls.should_use_client_cert():
         raise ValueError("Vertex owned HTTPX2 transport does not support automatic client-certificate mTLS.")
     responses = ContextVar("vertex_native_responses", default=None)
 
