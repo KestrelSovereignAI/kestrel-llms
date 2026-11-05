@@ -62,6 +62,11 @@ streaming rejects requested or returned tool calls. Vertex tool streaming keeps
 its advertised non-streaming handoff; Bedrock streaming does not support schema
 projection and refuses it before sending a request.
 
+Cancelling a Bedrock stream waits for the native read in progress before it
+returns. On Windows that read may wait for further wire data or botocore's
+read timeout (60 seconds by default). The original read stays owned until it
+settles; the adapter then closes the response and discards any late event.
+
 This is a breaking provider interface release. Callers must accept the final
 response on plain streams and use the client returned by `create_provider` for
 Vertex and Bedrock operations, including model discovery. Close those clients
@@ -69,8 +74,10 @@ with `await info.client.close()` when the provider is retired. Vertex accepts
 `base_url` and `api_version`; Bedrock accepts `endpoint_url` and `ca_bundle` for
 custom endpoints. Automatic Google client-certificate mTLS is refused in Vertex
 project mode because the owned HTTP transport cannot perform that SDK endpoint
-switch. API-key mode explicitly selects the Gemini API, so ambient Google SDK
-mode variables cannot silently change its endpoint or certificate behavior.
+switch. API-key mode selects the Gemini API. If `GOOGLE_GENAI_USE_VERTEXAI` or
+`GOOGLE_GENAI_USE_ENTERPRISE` requests Vertex express mode, construction fails
+before opening a client. Use Vertex project credentials, or clear those flags
+to select the Gemini API explicitly.
 
 ## Verification
 

@@ -156,6 +156,21 @@ def _native_finish_reason(choice: Any) -> Optional[str]:
     return reason
 
 
+def _tool_call(call_id: Any, name: Any, arguments: Any) -> ToolCall:
+    """Decode one complete native call without repairing malformed evidence."""
+    if any(type(value) is not str or not value for value in (call_id, name)):
+        raise LLMProtocolError("OpenAI tool call requires its native id and name.")
+    if type(arguments) is not str:
+        raise LLMProtocolError("OpenAI tool arguments must be a JSON object string.")
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as error:
+        raise LLMProtocolError("OpenAI tool arguments must contain valid JSON.") from error
+    if not isinstance(parsed, dict):
+        raise LLMProtocolError("OpenAI tool arguments must contain a JSON object.")
+    return ToolCall(id=call_id, name=name, arguments=parsed)
+
+
 def to_llm_response(response: Any) -> LLMResponse:
     """Convert a non-streaming SDK response while preserving the raw object.
 
@@ -169,13 +184,11 @@ def to_llm_response(response: Any) -> LLMResponse:
     if getattr(message, "tool_calls", None):
         tool_calls = []
         for call in message.tool_calls:
-            try:
-                args = json.loads(call.function.arguments)
-            except json.JSONDecodeError:
-                args = {"_raw": call.function.arguments}
-            tool_calls.append(
-                ToolCall(id=call.id, name=call.function.name, arguments=args)
-            )
+            function = getattr(call, "function", None)
+            tool_calls.append(_tool_call(
+                getattr(call, "id", None), getattr(function, "name", None),
+                getattr(function, "arguments", None),
+            ))
 
     usage = getattr(response, "usage", None)
     return LLMResponse(
@@ -250,18 +263,27 @@ async def stream_with_tool_calls(
                 yield content
             for delta_call in deltas:
                 index = delta_call.index
+                if type(index) is not int or index < 0:
+                    raise LLMProtocolError("OpenAI tool delta requires a non-negative integer index.")
                 is_new = index not in tool_calls
                 if is_new:
                     tool_calls[index] = {"id": "", "name": "", "arguments": ""}
                 current = tool_calls[index]
-                if getattr(delta_call, "id", None):
-                    current["id"] += delta_call.id
                 function = getattr(delta_call, "function", None)
+                for key, value in (("id", getattr(delta_call, "id", None)), ("name", getattr(function, "name", None))):
+                    if value is None:
+                        continue
+                    if type(value) is not str or not value:
+                        raise LLMProtocolError("OpenAI tool identity fields must be non-empty strings.")
+                    if current[key] and current[key] != value:
+                        raise LLMProtocolError("OpenAI tool delta returned a conflicting native identity.")
+                    current[key] = value
                 if function is not None:
-                    if getattr(function, "name", None):
-                        current["name"] += function.name
-                    if getattr(function, "arguments", None):
-                        current["arguments"] += function.arguments
+                    arguments = getattr(function, "arguments", None)
+                    if arguments is not None:
+                        if type(arguments) is not str:
+                            raise LLMProtocolError("OpenAI tool argument fragments must be strings.")
+                        current["arguments"] += arguments
                 if is_new:
                     yield ToolCallStarted(index=index, id=current["id"] or None, name=current["name"] or None)
             if reason is not None:
@@ -269,11 +291,7 @@ async def stream_with_tool_calls(
 
     parsed_tool_calls = []
     for current in tool_calls.values():
-        try:
-            arguments = json.loads(current["arguments"]) if current["arguments"] else {}
-        except json.JSONDecodeError:
-            arguments = {"_raw": current["arguments"]}
-        parsed_tool_calls.append(ToolCall(id=current["id"], name=current["name"], arguments=arguments))
+        parsed_tool_calls.append(_tool_call(current["id"], current["name"], current["arguments"]))
     yield LLMResponse(
         content=text_content or None, tool_calls=parsed_tool_calls or None,
         raw={"reasoning_content": reasoning_content} if reasoning_content else None,

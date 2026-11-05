@@ -1,6 +1,7 @@
 """Published provider contracts resolve without Core or private SDK sources."""
 
 from pathlib import Path
+import importlib.metadata
 import tomllib
 
 from packaging.requirements import Requirement
@@ -49,6 +50,8 @@ def test_provider_metadata_preserves_its_entry_point_and_tested_native_floor(pro
     if provider in {"deepseek", "xai", "kimi"}:
         requires_floor(deps["openai"], "3.46.0")
         requires_floor(deps["kestrel-llm-openai-compat"], "0.2.0")
+        assert "0.2.99" in deps["kestrel-llm-openai-compat"].specifier
+        assert "0.3.0" not in deps["kestrel-llm-openai-compat"].specifier
     elif provider == "vertex":
         requires_floor(deps["google-genai"], "2.34.0")
         requires_floor(deps["httpx2"], "2.16.0")
@@ -63,7 +66,7 @@ def test_shared_helper_has_no_provider_entry_point():
     assert "entry-points" not in manifest("kestrel-llm-openai-compat")["project"]
 
 
-def test_meta_extras_require_current_providers_without_the_old_ceiling():
+def test_meta_extras_require_the_current_compatible_provider_release():
     extras = manifest("kestrel-llms")["project"]["optional-dependencies"]
     assert set(extras) == {*PROVIDERS, "cloud", "all"}
     expected = {"kestrel-llm-" + name for name in PROVIDERS}
@@ -73,7 +76,8 @@ def test_meta_extras_require_current_providers_without_the_old_ceiling():
         for requirement in deps.values():
             requires_floor(requirement, "0.2.0")
             assert "0.1.99" not in requirement.specifier
-            assert "0.3.0" in requirement.specifier
+            assert "0.2.99" in requirement.specifier
+            assert "0.3.0" not in requirement.specifier
 
 
 def test_workspace_installs_every_vendor_sdk_through_its_code_packages():
@@ -93,3 +97,33 @@ def test_lock_uses_the_normal_public_sdk_without_core():
     assert sdk["source"] == {"registry": "https://pypi.org/simple"}
     urllib3, = [p for p in packages if canonicalize_name(p["name"]) == "urllib3"]
     assert Version(urllib3["version"]) >= Version("2.8.0")
+
+
+@pytest.mark.asyncio
+async def test_installed_entry_points_load_and_build_their_native_clients(monkeypatch):
+    import socket
+
+    def refuse_connection(*args, **kwargs):
+        raise AssertionError("Entry-point construction attempted an external connection")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse_connection)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse_connection)
+    entries = {entry.name: entry for entry in importlib.metadata.entry_points(group=GROUP)}
+    assert set(entries) == set(PROVIDERS.values())
+    for provider, entry_name in PROVIDERS.items():
+        entry = entries[entry_name]
+        expected = manifest("kestrel-llm-" + provider)["project"]["entry-points"][GROUP][entry_name]
+        assert entry.value == expected
+        adapter_type = entry.load()
+        assert adapter_type.__module__ + ":" + adapter_type.__name__ == expected
+        config = {"api_key": "owned-entry-point-key"}
+        if provider == "bedrock":
+            config = {"region": "us-east-1", "aws_access_key_id": "owned-access", "aws_secret_access_key": "owned-secret"}
+        info = adapter_type.create_provider(config)
+        try:
+            assert info.name == entry_name + ":api"
+            assert (info.vendor, info.route) == (entry_name, "api")
+            assert info.is_cloud is True and info.is_local is False
+            assert isinstance(info.adapter, adapter_type)
+        finally:
+            await info.client.close()

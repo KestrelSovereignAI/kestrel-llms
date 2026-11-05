@@ -41,13 +41,14 @@ def chunk(delta=None, *, reason=None, usage=None, index=0):
 @pytest.fixture
 def native_peer(monkeypatch, tmp_path):
     @contextmanager
-    def serve(frames, *, pause_after_first=False, wire="openai", json_response=False,
+    def serve(frames, *, pause_after_first=False, pause_after_second=False, wire="openai", json_response=False,
               pause_before_headers=False, tls=False):
         assert wire in {"openai", "vertex", "bedrock"}
         encoded = [] if json_response else [aws_event_frame(frame) if wire == "bedrock"
                    else ("data: " + json.dumps(frame) + "\n\n").encode() for frame in frames]
         calls, responses = [], []
         release = threading.Event()
+        release_second = threading.Event()
         release_headers = threading.Event()
         headers_reached = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -119,6 +120,9 @@ def native_peer(monkeypatch, tmp_path):
                         if position == 1 and pause_after_first:
                             if not release.wait(timeout=10):
                                 pause_timed_out.set()
+                        if position == 2 and pause_after_second:
+                            if not release_second.wait(timeout=10):
+                                pause_timed_out.set()
                         self.wfile.write((f"{len(payload):x}\r\n".encode() + payload + b"\r\n") if wire == "bedrock" else payload)
                         self.wfile.flush()
                     if wire == "openai":
@@ -126,7 +130,7 @@ def native_peer(monkeypatch, tmp_path):
                     elif wire == "bedrock":
                         self.wfile.write(b"0\r\n\r\n")
                     self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     # Closing a native SDK stream disconnects this owned peer.
                     return
 
@@ -179,11 +183,12 @@ def native_peer(monkeypatch, tmp_path):
                 scheme = "https" if tls else "http"
                 yield SimpleNamespace(url=f"{scheme}://127.0.0.1:{port}/v1", origin=f"{scheme}://127.0.0.1:{port}", calls=calls,
                                       responses=responses, raw_responses=raw_responses,
-                                      release=release, pause_timed_out=pause_timed_out,
+                                      release=release, release_second=release_second, pause_timed_out=pause_timed_out,
                                       headers_reached=headers_reached, release_headers=release_headers,
                                       ca_bundle=ca_bundle)
             finally:
                 release.set()
+                release_second.set()
                 release_headers.set()
                 server.shutdown()
                 server.server_close()

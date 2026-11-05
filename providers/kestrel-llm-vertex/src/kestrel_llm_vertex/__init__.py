@@ -100,6 +100,12 @@ def _client_from_config(config: Dict[str, Any]) -> VertexClient:
         or os.environ.get(config.get("api_key_env") or "GOOGLE_API_KEY")
         or os.environ.get("GEMINI_API_KEY")
     )
+    if api_key and any(os.environ.get(name, "").lower() in {"true", "1"}
+                       for name in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")):
+        raise ValueError(
+            "Vertex express mode selected by Google SDK environment is not supported by this API-key route. "
+            "Use Vertex project credentials, or clear the Vertex mode flags to select the Gemini API."
+        )
     project_id = None if api_key else (
         config.get("project_id")
         or os.environ.get("GOOGLE_CLOUD_PROJECT")

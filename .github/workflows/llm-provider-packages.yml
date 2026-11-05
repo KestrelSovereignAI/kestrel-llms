@@ -41,6 +41,7 @@ jobs:
   provider-packages:
     name: Providers (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -63,6 +64,12 @@ jobs:
       - name: Verify provider packages
         shell: bash
         run: scripts/llm_provider_packages.sh verify
+
+      - name: Install the optional aiohttp transport alongside HTTPX
+        run: uv pip install "aiohttp>=3.14,<4"
+
+      - name: Verify native clients with aiohttp present
+        run: uv run --locked --no-sync --group test pytest tests/unit/providers/test_backend_completion_streams.py tests/unit/providers/test_native_stream_ownership.py tests/unit/providers/test_llm_provider_plugins.py
 
   build:
     name: Build selected package

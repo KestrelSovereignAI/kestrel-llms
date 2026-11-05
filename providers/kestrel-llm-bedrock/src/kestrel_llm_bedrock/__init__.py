@@ -360,6 +360,15 @@ def _native_stop_reason(response: Dict[str, Any]) -> Optional[str]:
     return reason
 
 
+def _tool_call(call_id: Any, name: Any, arguments: Any) -> ToolCall:
+    """Require a complete native identity and object arguments."""
+    if any(type(value) is not str or not value for value in (call_id, name)):
+        raise LLMProtocolError("Bedrock tool call requires its native id and name.")
+    if not isinstance(arguments, dict):
+        raise LLMProtocolError("Bedrock tool arguments must contain a JSON object.")
+    return ToolCall(id=call_id, name=name, arguments=arguments)
+
+
 def _extract_response(response: Dict[str, Any]) -> LLMResponse:
     stop_reason = _native_stop_reason(response)
     message = (response.get("output") or {}).get("message") or {}
@@ -371,13 +380,9 @@ def _extract_response(response: Dict[str, Any]) -> LLMResponse:
             text_parts.append(block["text"])
         if "toolUse" in block:
             tool_use = block["toolUse"]
-            tool_calls.append(
-                ToolCall(
-                    id=tool_use.get("toolUseId") or f"bedrock_tool_{uuid.uuid4().hex}",
-                    name=tool_use.get("name") or "",
-                    arguments=tool_use.get("input") or {},
-                )
-            )
+            if not isinstance(tool_use, dict):
+                raise LLMProtocolError("Bedrock toolUse must be an object.")
+            tool_calls.append(_tool_call(tool_use.get("toolUseId"), tool_use.get("name"), tool_use.get("input")))
 
     input_tokens, output_tokens, total_tokens = _usage_tokens(response)
     return LLMResponse(
@@ -443,6 +448,9 @@ class _EventStreamReader:
     async def close(self) -> None:
         try:
             if self.read is not None and not self.read.done() and self.raw.connection is not None:
+                # SHUT_RD wakes POSIX reads. Winsock can keep an active
+                # receive pending until wire progress or the SDK read timeout.
+                # Retirement still joins this exact read before closing it.
                 try:
                     self.raw.shutdown()
                 except RuntimeError:
@@ -652,21 +660,18 @@ class BedrockAdapter(LLMAdapter):
                     if type(index) is not int or index not in tool_blocks:
                         raise LLMProtocolError("Bedrock tool delta requires an existing native tool block.")
                     current = tool_blocks[index]
-                    current["input"] += delta["toolUse"].get("input", "")
+                    fragment = delta["toolUse"].get("input")
+                    if type(fragment) is not str:
+                        raise LLMProtocolError("Bedrock tool argument fragments must be strings.")
+                    current["input"] += fragment
 
         tool_calls = []
         for current in tool_blocks.values():
             try:
-                arguments = json.loads(current["input"]) if current["input"] else {}
-            except json.JSONDecodeError:
-                arguments = {"_raw": current["input"]}
-            tool_calls.append(
-                ToolCall(
-                    id=current["id"],
-                    name=current["name"],
-                    arguments=arguments,
-                )
-            )
+                arguments = json.loads(current["input"])
+            except json.JSONDecodeError as error:
+                raise LLMProtocolError("Bedrock tool arguments must contain valid JSON.") from error
+            tool_calls.append(_tool_call(current["id"], current["name"], arguments))
         yield LLMResponse(
             content="".join(text_parts) or None,
             tool_calls=tool_calls or None,

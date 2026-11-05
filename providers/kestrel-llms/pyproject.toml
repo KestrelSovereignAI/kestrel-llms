@@ -8,24 +8,24 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-deepseek = ["kestrel-llm-deepseek>=0.2.0,<1"]
-xai = ["kestrel-llm-xai>=0.2.0,<1"]
-kimi = ["kestrel-llm-kimi>=0.2.0,<1"]
-vertex = ["kestrel-llm-vertex>=0.2.0,<1"]
-bedrock = ["kestrel-llm-bedrock>=0.2.0,<1"]
+deepseek = ["kestrel-llm-deepseek>=0.2.0,<0.3"]
+xai = ["kestrel-llm-xai>=0.2.0,<0.3"]
+kimi = ["kestrel-llm-kimi>=0.2.0,<0.3"]
+vertex = ["kestrel-llm-vertex>=0.2.0,<0.3"]
+bedrock = ["kestrel-llm-bedrock>=0.2.0,<0.3"]
 cloud = [
-    "kestrel-llm-bedrock>=0.2.0,<1",
-    "kestrel-llm-deepseek>=0.2.0,<1",
-    "kestrel-llm-xai>=0.2.0,<1",
-    "kestrel-llm-kimi>=0.2.0,<1",
-    "kestrel-llm-vertex>=0.2.0,<1",
+    "kestrel-llm-bedrock>=0.2.0,<0.3",
+    "kestrel-llm-deepseek>=0.2.0,<0.3",
+    "kestrel-llm-xai>=0.2.0,<0.3",
+    "kestrel-llm-kimi>=0.2.0,<0.3",
+    "kestrel-llm-vertex>=0.2.0,<0.3",
 ]
 all = [
-    "kestrel-llm-bedrock>=0.2.0,<1",
-    "kestrel-llm-deepseek>=0.2.0,<1",
-    "kestrel-llm-xai>=0.2.0,<1",
-    "kestrel-llm-kimi>=0.2.0,<1",
-    "kestrel-llm-vertex>=0.2.0,<1",
+    "kestrel-llm-bedrock>=0.2.0,<0.3",
+    "kestrel-llm-deepseek>=0.2.0,<0.3",
+    "kestrel-llm-xai>=0.2.0,<0.3",
+    "kestrel-llm-kimi>=0.2.0,<0.3",
+    "kestrel-llm-vertex>=0.2.0,<0.3",
 ]
 
 [build-system]

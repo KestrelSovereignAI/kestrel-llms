@@ -1,7 +1,9 @@
 """Physical native SDK response ownership, cancellation and client shutdown."""
 
 import asyncio
-from contextlib import contextmanager
+import threading
+from types import SimpleNamespace
+from contextlib import asynccontextmanager, contextmanager
 
 import pytest
 
@@ -35,51 +37,6 @@ def frames(backend):
             {"messageStop": {"stopReason": "end_turn"}}]
 
 
-@pytest.mark.parametrize("backend,tls", [("vertex", False), ("bedrock", False), ("bedrock", True)])
-async def test_cancel_native_blocked_read_joins_before_return(native_peer, monkeypatch, backend, tls):
-    """The second task owns cancellation and then closes the suspended facade."""
-    with native_peer(frames(backend), wire=backend, tls=tls, pause_after_first=True) as peer, loop_errors():
-        factory = owned_vertex_client if backend == "vertex" else owned_bedrock_client
-        adapter = VertexAIAdapter() if backend == "vertex" else bedrock.BedrockAdapter()
-        async with factory(peer) as client:
-            stream = adapter.get_streaming_response(client, "owned-model", MESSAGES)
-            assert await anext(stream) == "partial"
-            entered = asyncio.Event()
-            if backend == "bedrock":
-                submit = bedrock._submit
-                loop = asyncio.get_running_loop()
-
-                def observe_submit(function, *args, **kwargs):
-                    if function is next:
-                        def observed_next():
-                            loop.call_soon_threadsafe(entered.set)
-                            return function(*args, **kwargs)
-                        return submit(observed_next)
-                    return submit(function, *args, **kwargs)
-
-                monkeypatch.setattr(bedrock, "_submit", observe_submit)
-
-            async def read():
-                if backend == "vertex":
-                    entered.set()
-                return await anext(stream)
-
-            task = asyncio.create_task(read())
-            await asyncio.wait_for(entered.wait(), 2)
-            # The peer withholds the second frame; an event-loop ticker must run.
-            for _ in range(4):
-                await asyncio.sleep(0.01)
-                assert not task.done()
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, 3)
-            assert task.cancelled()
-            await stream.aclose()
-            responses = peer.responses if backend == "vertex" else peer.raw_responses
-            assert responses and all(r.is_closed if backend == "vertex" else r.closed for r in responses)
-            assert not peer.pause_timed_out.is_set()
-            assert len(peer.calls) == 1
-            await asyncio.sleep(0)
 
 
 async def test_cancel_bedrock_start_waits_for_native_call_and_closes_capture(native_peer):
@@ -148,6 +105,11 @@ async def test_vertex_api_key_mode_does_not_use_automatic_mtls(native_peer, monk
     if mode_variable is not None:
         monkeypatch.setenv(mode_variable, "true")
     with native_peer(frames("vertex"), wire="vertex") as peer:
+        if mode_variable is not None:
+            with pytest.raises(ValueError, match="Vertex express"):
+                VertexAIAdapter.create_provider({"api_key": "owned-key", "base_url": peer.origin})
+            assert peer.calls == []
+            return
         async with owned_vertex_client(peer) as client:
             assert client.genai.vertexai is False
             assert not client.http.is_closed
@@ -219,44 +181,195 @@ async def test_native_cleanup_failure_prevents_terminal(native_peer, monkeypatch
             assert responses and all(r.is_closed if backend == "vertex" else r.closed for r in responses)
 
 
+
+
+
+@asynccontextmanager
+async def observed_bedrock_read(monkeypatch, raw, *, peer, stream, shutdown_failure=None):
+    """Observe the real native read, shutdown and close without replacing them.
+
+    The settled read is held until the test settles it, so every OS shows the
+    join: shutdown wakes a blocked POSIX read, while Winsock leaves it blocked.
+    """
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.current_thread()
+    observed = SimpleNamespace(entered=asyncio.Event(), returned=asyncio.Event(), shut=asyncio.Event(),
+                               reads=[], tasks=[], shutdowns=[], closes=[],
+                               settle=threading.Event(), settle_timed_out=threading.Event())
+    submit, shutdown, close = bedrock._submit, raw.shutdown, raw.close
+
+    def observe_submit(function, *args, **kwargs):
+        if function is not next:
+            return submit(function, *args, **kwargs)
+
+        def read():
+            loop.call_soon_threadsafe(observed.entered.set)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                loop.call_soon_threadsafe(observed.returned.set)
+                if not observed.settle.wait(timeout=10):
+                    observed.settle_timed_out.set()
+
+        future = submit(read)
+        observed.reads.append(future)
+        return future
+
+    def observe_shutdown():
+        observed.shutdowns.append([read.done() for read in observed.reads])
+        try:
+            shutdown()
+        finally:
+            observed.shut.set()
+        if shutdown_failure is not None:
+            raise shutdown_failure
+
+    def observe_close():
+        # urllib3 also closes from the reading thread when it reaches EOF.
+        if threading.current_thread() is loop_thread:
+            observed.closes.append([read.done() for read in observed.reads])
+        close()
+
+    monkeypatch.setattr(bedrock, "_submit", observe_submit)
+    monkeypatch.setattr(raw, "shutdown", observe_shutdown)
+    monkeypatch.setattr(raw, "close", observe_close)
+    try:
+        yield observed
+    finally:
+        peer.release.set()
+        peer.release_second.set()
+        observed.settle.set()
+        if observed.tasks or observed.reads:
+            done, pending = await asyncio.wait({*observed.tasks, *observed.reads}, timeout=3)
+            for future in done:
+                if not future.cancelled():
+                    future.exception()
+            assert not pending, "Native observation cleanup did not join its original work"
+        await stream.aclose()
+
+
+async def test_cancel_vertex_blocked_read_closes_without_wire_progress(native_peer):
+    """Async native I/O is interrupted by cancellation itself on every OS."""
+    with native_peer(frames("vertex"), wire="vertex", pause_after_first=True) as peer, loop_errors():
+        async with owned_vertex_client(peer) as client:
+            stream = VertexAIAdapter().get_streaming_response(client, "owned-model", MESSAGES)
+            assert await anext(stream) == "partial"
+            task = asyncio.create_task(anext(stream))
+            # The peer withholds the second frame; an event-loop ticker must run.
+            for _ in range(4):
+                await asyncio.sleep(0.01)
+                assert not task.done()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 3)
+            assert task.cancelled()
+            await stream.aclose()
+            assert peer.responses and all(r.is_closed for r in peer.responses)
+            assert not peer.pause_timed_out.is_set()
+            assert len(peer.calls) == 1
+
+
+@pytest.mark.parametrize("tls", [False, True])
+async def test_cancel_bedrock_blocked_read_is_owned_until_it_settles(native_peer, monkeypatch, tls):
+    """Cancellation shuts the read side, then joins that exact native read.
+
+    Winsock does not wake a receive already blocked when its read side is shut,
+    so the cancelled caller waits until wire progress settles the read. It is
+    never told the stream stopped before then.
+    """
+    with native_peer(frames("bedrock"), wire="bedrock", tls=tls, pause_after_first=True) as peer, loop_errors():
+        async with owned_bedrock_client(peer) as client:
+            stream = bedrock.BedrockAdapter().get_streaming_response(client, "owned-model", MESSAGES)
+            assert await anext(stream) == "partial"
+            raw, = peer.raw_responses
+            async with observed_bedrock_read(monkeypatch, raw, peer=peer, stream=stream) as observed:
+                task = asyncio.create_task(anext(stream))
+                observed.tasks.append(task)
+                await asyncio.wait_for(observed.entered.wait(), 2)
+                for _ in range(4):
+                    await asyncio.sleep(0.01)
+                    assert not task.done()
+                task.cancel()
+                await asyncio.sleep(0)
+                assert observed.shut.is_set(), "Native read-side shutdown was not invoked"
+                read, = observed.reads
+                task.cancel()
+                for _ in range(4):
+                    await asyncio.sleep(0.01)
+                    assert not read.done() and not task.done() and observed.closes == []
+                peer.release.set()
+                observed.settle.set()
+                done, _ = await asyncio.wait({task}, timeout=3)
+                assert done == {task} and task.cancelled()
+                assert read.done() and not read.cancelled()
+                assert observed.shutdowns == [[False]] and observed.closes == [[True]] and raw.closed
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+            assert len(peer.calls) == 1
+            assert not peer.pause_timed_out.is_set() and not observed.settle_timed_out.is_set()
+
+
+async def test_cancel_bedrock_never_delivers_a_late_native_event(native_peer, monkeypatch):
+    """A tool event whose native read settles after withdrawal is retrieved, never delivered."""
+    events = [{"contentBlockDelta": {"delta": {"text": "partial"}}},
+              {"contentBlockStart": {"contentBlockIndex": 0,
+                                     "start": {"toolUse": {"toolUseId": "late-tool", "name": "owned_tool"}}}},
+              {"messageStop": {"stopReason": "tool_use"}}]
+    with native_peer(events, wire="bedrock", pause_after_first=True, pause_after_second=True) as peer, loop_errors():
+        async with owned_bedrock_client(peer) as client:
+            stream = bedrock.BedrockAdapter().get_streaming_response_with_tools(client, "owned-model", MESSAGES)
+            assert await anext(stream) == "partial"
+            raw, = peer.raw_responses
+            async with observed_bedrock_read(monkeypatch, raw, peer=peer, stream=stream) as observed:
+                task = asyncio.create_task(anext(stream))
+                observed.tasks.append(task)
+                await asyncio.wait_for(observed.entered.wait(), 2)
+                peer.release.set()
+                await asyncio.wait_for(observed.returned.wait(), 2)
+                read, = observed.reads
+                assert not read.done() and not task.done()
+                task.cancel()
+                await asyncio.sleep(0)
+                assert observed.shut.is_set(), "Native read-side shutdown was not invoked"
+                observed.settle.set()
+                done, _ = await asyncio.wait({task}, timeout=3)
+                assert done == {task} and task.cancelled()
+                assert "contentBlockStart" in read.result()
+                assert observed.shutdowns == [[False]] and observed.closes == [[True]] and raw.closed
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+            assert len(peer.calls) == 1 and not peer.pause_timed_out.is_set()
+
+
 async def test_bedrock_shutdown_failure_propagates_after_join_and_close(native_peer, monkeypatch):
-    failure = RuntimeError("owned shutdown failure")
+    failure = OSError("owned shutdown failure")
     with native_peer(frames("bedrock"), wire="bedrock", pause_after_first=True) as peer, loop_errors():
         async with owned_bedrock_client(peer) as client:
             stream = bedrock.BedrockAdapter().get_streaming_response(client, "owned-model", MESSAGES)
             assert await anext(stream) == "partial"
             raw, = peer.raw_responses
-            shutdown = raw.shutdown
-
-            def fail_after_shutdown():
-                shutdown()
-                raise failure
-
-            monkeypatch.setattr(raw, "shutdown", fail_after_shutdown)
-            entered = asyncio.Event()
-            reads = []
-            loop = asyncio.get_running_loop()
-            submit = bedrock._submit
-
-            def observe_submit(function, *args, **kwargs):
-                if function is next:
-                    def read():
-                        loop.call_soon_threadsafe(entered.set)
-                        return function(*args, **kwargs)
-                    future = submit(read)
-                    reads.append(future)
-                    return future
-                return submit(function, *args, **kwargs)
-
-            monkeypatch.setattr(bedrock, "_submit", observe_submit)
-            task = asyncio.create_task(anext(stream))
-            await asyncio.wait_for(entered.wait(), 2)
-            await asyncio.sleep(0.02)
-            assert not task.done()
-            task.cancel()
-            with pytest.raises(RuntimeError) as raised:
-                await asyncio.wait_for(task, 3)
-            assert raised.value is failure
-            assert reads and all(read.done() and not read.cancelled() for read in reads)
-            assert raw.closed and not peer.pause_timed_out.is_set()
-            await stream.aclose()
+            async with observed_bedrock_read(monkeypatch, raw, peer=peer, stream=stream, shutdown_failure=failure) as observed:
+                task = asyncio.create_task(anext(stream))
+                observed.tasks.append(task)
+                await asyncio.wait_for(observed.entered.wait(), 2)
+                await asyncio.sleep(0.02)
+                assert not task.done()
+                task.cancel()
+                await asyncio.sleep(0)
+                assert observed.shut.is_set(), "Native read-side shutdown was not invoked"
+                read, = observed.reads
+                for _ in range(4):
+                    await asyncio.sleep(0.01)
+                    assert not read.done() and not task.done() and observed.closes == []
+                peer.release.set()
+                observed.settle.set()
+                done, _ = await asyncio.wait({task}, timeout=3)
+                assert done == {task} and not task.cancelled(), "Shutdown failure must survive cancellation"
+                assert task.exception() is failure
+                assert isinstance(failure.__context__, asyncio.CancelledError)
+                assert read.done() and not read.cancelled()
+                assert observed.shutdowns == [[False]] and observed.closes == [[True]] and raw.closed
+            with pytest.raises(StopAsyncIteration):
+                await anext(stream)
+            assert len(peer.calls) == 1
+            assert not peer.pause_timed_out.is_set() and not observed.settle_timed_out.is_set()
