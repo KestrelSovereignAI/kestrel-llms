@@ -4,16 +4,21 @@ version = "0.1.1"
 description = "Workspace tooling for the Kestrel LLM provider plugin monorepo."
 requires-python = ">=3.11,<3.15"
 dependencies = [
-    "kestrel-sovereign>=0.13.1",
-    "kestrel-sovereign-sdk>=0.17.0,<1",
-    "openai==1.93.2",
-    "pydantic>=2",
+    "kestrel-llm-openai-compat>=0.2.0,<1",
+    "kestrel-llm-deepseek>=0.2.0,<1",
+    "kestrel-llm-xai>=0.2.0,<1",
+    "kestrel-llm-kimi>=0.2.0,<1",
+    "kestrel-llm-vertex>=0.2.0,<1",
+    "kestrel-llm-bedrock>=0.2.0,<1",
 ]
 
 [dependency-groups]
 test = [
     "pytest>=8.0.0",
     "pytest-asyncio>=1.1.0",
+    "pytest-timeout>=2.3.1",
+    "packaging>=24",
+    "cryptography>=50",
 ]
 
 [tool.uv]
@@ -32,5 +37,6 @@ members = ["providers/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-x --tb=short"

@@ -64,7 +64,7 @@ jobs:
         run: uv python install 3.14
 
       - name: Install test environment
-        run: uv sync --group test
+        run: uv sync --locked --python 3.14 --group test
 
       - name: Verify packages
         run: scripts/llm_provider_packages.sh verify

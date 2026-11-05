@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import aclosing
 from typing import Any, AsyncIterator, Dict, List, Optional, Type
 
 import openai
@@ -14,6 +15,7 @@ from kestrel_llm_openai_compat import (
     normalize_messages,
     openai_compatible_capabilities,
     stream_with_tool_calls,
+    stream_text_only,
     to_llm_response,
 )
 from kestrel_sdk.llm import (
@@ -111,24 +113,14 @@ class XAIAdapter(LLMAdapter):
         tools: Optional[List[Dict[str, Any]]] = None,
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        extra = completion_kwargs(
-            None,
-            tools,
-            response_format,
-            kwargs,
+    ) -> AsyncIterator[str | LLMResponse]:
+        async with aclosing(stream_text_only(
+            client, model, messages, tools, response_format,
             passthrough_keys=REASONING_COMPLETION_KWARGS,
-        )
-        stream = await client.chat.completions.create(
-            model=model,
-            messages=normalize_messages(messages),
-            stream=True,
-            **extra,
-        )
-        async for chunk in stream:
-            content = getattr(chunk.choices[0].delta, "content", None)
-            if content:
-                yield content
+            **kwargs,
+        )) as stream:
+            async for item in stream:
+                yield item
 
     async def get_streaming_response_with_tools(
         self,
@@ -139,16 +131,13 @@ class XAIAdapter(LLMAdapter):
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
     ) -> AsyncIterator[str | ToolCallStarted | LLMResponse]:
-        async for item in stream_with_tool_calls(
-            client,
-            model,
-            messages,
-            tools,
-            response_format,
+        async with aclosing(stream_with_tool_calls(
+            client, model, messages, tools, response_format,
             passthrough_keys=REASONING_COMPLETION_KWARGS,
             **kwargs,
-        ):
-            yield item
+        )) as stream:
+            async for item in stream:
+                yield item
 
     async def list_models(self, client: openai.AsyncOpenAI) -> List[ModelInfo]:
         models = await client.models.list()
