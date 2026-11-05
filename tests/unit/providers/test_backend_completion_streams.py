@@ -177,7 +177,7 @@ async def test_bedrock_native_tool_blocks_reject_missing_or_duplicate_start(nati
     observed = []
     with native_peer(frames, wire="bedrock") as peer:
         async with owned_bedrock_client(peer) as client:
-            with pytest.raises(LLMProtocolError):
+            with pytest.raises(LLMProtocolError, match="existing native tool block|new non-negative integer index|native id and name"):
                 async for item in BedrockAdapter().get_streaming_response_with_tools(client, "owned-model", [{"role": "user", "content": "owned"}]):
                     observed.append(item)
             assert not any(isinstance(item, LLMResponse) for item in observed)
