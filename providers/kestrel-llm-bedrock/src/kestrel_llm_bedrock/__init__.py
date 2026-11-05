@@ -7,13 +7,19 @@ import base64
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from contextlib import AsyncExitStack, aclosing, asynccontextmanager
+from contextvars import ContextVar, copy_context
+from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, AsyncIterator, Dict, List, Optional, Type
 
 from pydantic import BaseModel
+from botocore.eventstream import EventStream
+from urllib3.response import HTTPResponse
 
 from kestrel_sdk.llm import (
     LLMAdapter,
+    LLMProtocolError,
     LLMResponse,
     ModelCategory,
     ModelInfo,
@@ -35,6 +41,21 @@ class BedrockClients:
     runtime: Any
     management: Any
     region: str
+    responses: ContextVar = field(default_factory=lambda: ContextVar("bedrock_native_responses", default=None), repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        def capture(http_response: Any, **kwargs: Any) -> None:
+            sink = self.responses.get()
+            if sink is not None:
+                sink.append(http_response.raw)
+
+        self.runtime.meta.events.register("after-call.bedrock-runtime.ConverseStream", capture)
+
+    async def close(self) -> None:
+        async with AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(_to_thread, self.management.close)
+            if self.runtime is not self.management:
+                cleanup.push_async_callback(_to_thread, self.runtime.close)
 
 
 def _load_boto3() -> Any:
@@ -48,11 +69,9 @@ def _load_boto3() -> Any:
 
 
 def _client_config() -> Any:
-    try:
-        from botocore.config import Config
-    except ImportError:
-        return None
-    return Config(retries={"max_attempts": 1})
+    from botocore.config import Config
+
+    return Config(retries={"total_max_attempts": 1})
 
 
 def _region_from_config(config: Dict[str, Any]) -> str:
@@ -84,9 +103,9 @@ def _client_from_config(config: Dict[str, Any]) -> Any:
         "region_name": region,
         "endpoint_url": config.get("endpoint_url"),
     }
-    client_config = _client_config()
-    if client_config is not None:
-        common_kwargs["config"] = client_config
+    common_kwargs["config"] = _client_config()
+    if config.get("ca_bundle"):
+        common_kwargs["verify"] = config["ca_bundle"]
     return BedrockClients(
         runtime=session.client(
             "bedrock-runtime",
@@ -100,29 +119,18 @@ def _client_from_config(config: Dict[str, Any]) -> Any:
     )
 
 
+def _require_clients(client: Any) -> BedrockClients:
+    if not isinstance(client, BedrockClients):
+        raise TypeError("Bedrock operations require the owned clients returned by create_provider.")
+    return client
+
+
 def _runtime_client(client: Any) -> Any:
-    return client.runtime if isinstance(client, BedrockClients) else client
+    return _require_clients(client).runtime
 
 
 def _management_client(client: Any) -> Any:
-    if isinstance(client, BedrockClients):
-        return client.management
-    if hasattr(client, "list_foundation_models"):
-        return client
-    if client is not None:
-        raise ValueError(
-            "Bedrock list_models requires BedrockClients, a Bedrock management client, or no client."
-        )
-
-    kwargs = {
-        "region_name": os.environ.get("AWS_REGION")
-        or os.environ.get("AWS_DEFAULT_REGION")
-        or "us-east-1",
-    }
-    client_config = _client_config()
-    if client_config is not None:
-        kwargs["config"] = client_config
-    return _load_boto3().Session().client("bedrock", **kwargs)
+    return _require_clients(client).management
 
 
 def _text_block(value: Any) -> Optional[Dict[str, Any]]:
@@ -271,7 +279,7 @@ def _convert_tools(
             {
                 "toolSpec": {
                     "name": function["name"],
-                    "description": function.get("description", ""),
+                    **({"description": function["description"]} if "description" in function else {}),
                     "inputSchema": {
                         "json": function.get("parameters", {"type": "object", "properties": {}})
                     },
@@ -345,7 +353,24 @@ def _usage_tokens(response: Dict[str, Any]) -> tuple[Optional[int], Optional[int
     return input_tokens, output_tokens, total_tokens
 
 
+def _native_stop_reason(response: Dict[str, Any]) -> Optional[str]:
+    reason = response.get("stopReason")
+    if reason is not None and (type(reason) is not str or not reason):
+        raise LLMProtocolError("Bedrock stopReason must be a non-empty string or absent.")
+    return reason
+
+
+def _tool_call(call_id: Any, name: Any, arguments: Any) -> ToolCall:
+    """Require a complete native identity and object arguments."""
+    if any(type(value) is not str or not value for value in (call_id, name)):
+        raise LLMProtocolError("Bedrock tool call requires its native id and name.")
+    if not isinstance(arguments, dict):
+        raise LLMProtocolError("Bedrock tool arguments must contain a JSON object.")
+    return ToolCall(id=call_id, name=name, arguments=arguments)
+
+
 def _extract_response(response: Dict[str, Any]) -> LLMResponse:
+    stop_reason = _native_stop_reason(response)
     message = (response.get("output") or {}).get("message") or {}
     text_parts: List[str] = []
     tool_calls: List[ToolCall] = []
@@ -355,13 +380,9 @@ def _extract_response(response: Dict[str, Any]) -> LLMResponse:
             text_parts.append(block["text"])
         if "toolUse" in block:
             tool_use = block["toolUse"]
-            tool_calls.append(
-                ToolCall(
-                    id=tool_use.get("toolUseId") or f"bedrock_tool_{uuid.uuid4().hex}",
-                    name=tool_use.get("name") or "",
-                    arguments=tool_use.get("input") or {},
-                )
-            )
+            if not isinstance(tool_use, dict):
+                raise LLMProtocolError("Bedrock toolUse must be an object.")
+            tool_calls.append(_tool_call(tool_use.get("toolUseId"), tool_use.get("name"), tool_use.get("input")))
 
     input_tokens, output_tokens, total_tokens = _usage_tokens(response)
     return LLMResponse(
@@ -371,71 +392,104 @@ def _extract_response(response: Dict[str, Any]) -> LLMResponse:
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
+        stop_reason=stop_reason,
     )
 
 
-async def _to_thread(func: Any, **kwargs: Any) -> Any:
-    return await asyncio.to_thread(func, **kwargs)
+def _submit(function: Any, *args: Any, **kwargs: Any) -> asyncio.Future:
+    context = copy_context()
+    return asyncio.get_running_loop().run_in_executor(None, context.run, partial(function, *args, **kwargs))
+
+
+async def _joined(call: asyncio.Future, *, withdrawn: bool = False) -> Any:
+    """Join the exact native operation even when its observer is cancelled."""
+    cancelled = None
+    while not call.done():
+        try:
+            await asyncio.wait((call,))
+        except asyncio.CancelledError as error:
+            cancelled = cancelled or error
+    if cancelled is not None:
+        call.exception()
+        raise cancelled
+    if withdrawn:
+        call.exception()
+        return None
+    return call.result()
+
+
+async def _to_thread(function: Any, **kwargs: Any) -> Any:
+    return await _joined(_submit(function, **kwargs))
 
 
 _STREAM_DONE = object()
 
 
-async def _aiter_event_stream(stream: Any) -> AsyncIterator[Dict[str, Any]]:
-    """Async-iterate a botocore ``EventStream`` WITHOUT blocking the loop.
+class _EventStreamReader:
+    """One demand-driven native read and the public HTTP response it owns."""
 
-    Each ``next()`` on a botocore EventStream is a blocking socket read. Running
-    ``for event in stream`` directly inside an async generator executes those
-    reads on the event loop, so between every Bedrock chunk the whole host —
-    all agents, SSE streams, health checks, the A2A server — freezes for the
-    entire generation (F407). Instead pump the stream in a worker thread that
-    feeds an ``asyncio.Queue`` and ``async for`` off the queue, so every event
-    boundary yields control back to the loop. Exceptions from the blocking
-    iteration are propagated to the consumer; a sentinel terminates it.
-    """
-    if stream is None:
-        return
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
+    def __init__(self, events: EventStream, raw: HTTPResponse) -> None:
+        self.events = iter(events)
+        self.raw = raw
+        self.read = None
 
-    def _pump() -> None:
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        self.read = _submit(next, self.events, _STREAM_DONE)
+        await asyncio.wait((self.read,))
+        value = self.read.result()
+        self.read = None
+        if value is _STREAM_DONE:
+            raise StopAsyncIteration
+        return value
+
+    async def close(self) -> None:
         try:
-            for event in stream:
-                loop.call_soon_threadsafe(queue.put_nowait, (event, None))
-        except Exception as exc:  # noqa: BLE001 - surfaced to the consumer
-            loop.call_soon_threadsafe(queue.put_nowait, (None, exc))
+            if self.read is not None and not self.read.done() and self.raw.connection is not None:
+                # SHUT_RD wakes POSIX reads. Winsock can keep an active
+                # receive pending until wire progress or the SDK read timeout.
+                # Retirement still joins this exact read before closing it.
+                try:
+                    self.raw.shutdown()
+                except RuntimeError:
+                    if self.raw.connection is not None:
+                        raise
         finally:
-            loop.call_soon_threadsafe(queue.put_nowait, _STREAM_DONE)
-
-    task = asyncio.ensure_future(asyncio.to_thread(_pump))
-    try:
-        while True:
-            item = await queue.get()
-            if item is _STREAM_DONE:
-                return
-            event, exc = item
-            if exc is not None:
-                raise exc
-            yield event
-    finally:
-        # If the consumer stopped early (SSE disconnect, an ``async for`` break,
-        # cancellation), close the underlying stream so the pump's BLOCKING read
-        # unblocks and stops draining the still-live Bedrock request to
-        # completion on a worker thread (codex P2). On normal exhaustion the
-        # pump has already finished and close() is a harmless no-op. The test
-        # double for a plain iterator has no close(); guard with getattr.
-        close = getattr(stream, "close", None)
-        if callable(close):
             try:
-                close()
-            except Exception:  # noqa: BLE001 - best effort teardown
-                pass
-        # The worker thread can't be interrupted mid-read (only closing the
-        # stream unblocks it); retrieve its result so a stray exception isn't
-        # reported as never-retrieved.
-        task.add_done_callback(
-            lambda t: None if t.cancelled() else t.exception()
-        )
+                if self.read is not None:
+                    # Shutdown can make a withdrawn read report truncated wire
+                    # data. Retrieve its outcome; never deliver it as a result.
+                    await _joined(self.read, withdrawn=True)
+            finally:
+                self.raw.close()
+
+
+@asynccontextmanager
+async def _owned_event_stream(client: BedrockClients, payload: Dict[str, Any]):
+    client = _require_clients(client)
+    responses = []
+    reader = None
+    token = client.responses.set(responses)
+    try:
+        call = _submit(client.runtime.converse_stream, **payload)
+    finally:
+        client.responses.reset(token)
+    try:
+        response = await _joined(call)
+        events = response.get("stream")
+        if not isinstance(events, EventStream) or len(responses) != 1 or not isinstance(responses[0], HTTPResponse):
+            raise LLMProtocolError("Bedrock streaming requires one owned native event stream and HTTP response.")
+        reader = _EventStreamReader(events, responses[0])
+        yield reader, {key: value for key, value in response.items() if key != "stream"}
+    finally:
+        if reader is not None:
+            await reader.close()
+        else:
+            async with AsyncExitStack() as cleanup:
+                for raw in responses:
+                    cleanup.callback(raw.close)
 
 
 class BedrockAdapter(LLMAdapter):
@@ -487,6 +541,7 @@ class BedrockAdapter(LLMAdapter):
                 "Uses AWS Bedrock Runtime Converse APIs.",
                 "Feature support depends on the selected Bedrock model family.",
                 "Structured output is implemented with a forced Bedrock tool call.",
+                "Structured output requires the non-streaming method.",
             ),
         )
 
@@ -518,13 +573,7 @@ class BedrockAdapter(LLMAdapter):
                 None,
             )
             if structured is not None:
-                return LLMResponse(
-                    content=json.dumps(structured),
-                    raw=response,
-                    input_tokens=llm_response.input_tokens,
-                    output_tokens=llm_response.output_tokens,
-                    total_tokens=llm_response.total_tokens,
-                )
+                return replace(llm_response, content=json.dumps(structured), tool_calls=None)
         return llm_response
 
     async def get_streaming_response(
@@ -535,20 +584,19 @@ class BedrockAdapter(LLMAdapter):
         tools: Optional[List[Dict[str, Any]]] = None,
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        payload = _request_payload(model, messages, tools, response_format, kwargs)
-        response = await _to_thread(_runtime_client(client).converse_stream, **payload)
-        # Finalize the inner generator DETERMINISTICALLY on early close (it
-        # closes the underlying stream) — a bare ``async for`` would only
-        # finalize it on GC, leaving the live Bedrock request draining (F407).
-        events = _aiter_event_stream(response.get("stream"))
-        try:
-            async for event in events:
-                delta = event.get("contentBlockDelta", {}).get("delta", {})
-                if "text" in delta:
-                    yield delta["text"]
-        finally:
-            await events.aclose()
+    ) -> AsyncIterator[str | LLMResponse]:
+        if tools:
+            raise LLMProtocolError("Plain Bedrock streaming does not accept tools.")
+        async with aclosing(self.get_streaming_response_with_tools(
+            client, model, messages, response_format=response_format, **kwargs,
+        )) as stream:
+            async for item in stream:
+                if isinstance(item, ToolCallStarted) or (
+                    isinstance(item, LLMResponse)
+                    and (item.has_tool_calls or item.stop_reason == "tool_use")
+                ):
+                    raise LLMProtocolError("Plain Bedrock streaming received unexpected tool evidence.")
+                yield item
 
     async def get_streaming_response_with_tools(
         self,
@@ -559,30 +607,41 @@ class BedrockAdapter(LLMAdapter):
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
     ) -> AsyncIterator[str | ToolCallStarted | LLMResponse]:
-        payload = _request_payload(model, messages, tools, response_format, kwargs)
-        response = await _to_thread(_runtime_client(client).converse_stream, **payload)
+        if response_format is not None:
+            raise LLMProtocolError("Bedrock structured output requires the non-streaming method.")
+        payload = _request_payload(model, messages, tools, None, kwargs)
 
         text_parts: List[str] = []
         tool_blocks: Dict[int, Dict[str, Any]] = {}
         input_tokens = output_tokens = total_tokens = None
+        stop_reason = None
+        stop_seen = False
 
-        # Finalize the inner generator deterministically on early close (it
-        # closes the underlying stream, F407); the post-loop final response
-        # only runs on normal completion of the stream.
-        events = _aiter_event_stream(response.get("stream"))
-        try:
+        async with _owned_event_stream(_require_clients(client), payload) as (events, response):
             async for event in events:
+                if "messageStop" in event:
+                    if stop_seen:
+                        raise LLMProtocolError("Bedrock stream returned more than one messageStop.")
+                    stop_seen = True
+                    stop_reason = _native_stop_reason(event["messageStop"])
+                    continue
+                if stop_seen and ("contentBlockStart" in event or "contentBlockDelta" in event):
+                    raise LLMProtocolError("Bedrock stream returned content after terminal evidence.")
                 if "metadata" in event:
                     input_tokens, output_tokens, total_tokens = _usage_tokens(event["metadata"])
                     continue
 
                 start = event.get("contentBlockStart", {}).get("start", {})
                 if "toolUse" in start:
-                    index = event["contentBlockStart"].get("contentBlockIndex", len(tool_blocks))
+                    index = event["contentBlockStart"].get("contentBlockIndex")
+                    if type(index) is not int or index < 0 or index in tool_blocks:
+                        raise LLMProtocolError("Bedrock tool block requires a new non-negative integer index.")
                     tool_use = start["toolUse"]
+                    if any(type(tool_use.get(key)) is not str or not tool_use[key] for key in ("toolUseId", "name")):
+                        raise LLMProtocolError("Bedrock tool block requires its native id and name.")
                     tool_blocks[index] = {
-                        "id": tool_use.get("toolUseId") or f"bedrock_tool_{uuid.uuid4().hex}",
-                        "name": tool_use.get("name") or "",
+                        "id": tool_use["toolUseId"],
+                        "name": tool_use["name"],
                         "input": "",
                     }
                     yield ToolCallStarted(
@@ -598,38 +657,33 @@ class BedrockAdapter(LLMAdapter):
                     text_parts.append(delta["text"])
                     yield delta["text"]
                 if "toolUse" in delta:
-                    index = delta_event.get("contentBlockIndex", 0)
-                    current = tool_blocks.setdefault(
-                        index,
-                        {"id": f"bedrock_tool_{uuid.uuid4().hex}", "name": "", "input": ""},
-                    )
-                    current["input"] += delta["toolUse"].get("input", "")
-        finally:
-            await events.aclose()
+                    index = delta_event.get("contentBlockIndex")
+                    if type(index) is not int or index not in tool_blocks:
+                        raise LLMProtocolError("Bedrock tool delta requires an existing native tool block.")
+                    current = tool_blocks[index]
+                    fragment = delta["toolUse"].get("input")
+                    if type(fragment) is not str:
+                        raise LLMProtocolError("Bedrock tool argument fragments must be strings.")
+                    current["input"] += fragment
 
-        if tool_blocks:
-            tool_calls = []
-            for index in sorted(tool_blocks):
-                current = tool_blocks[index]
-                try:
-                    arguments = json.loads(current["input"]) if current["input"] else {}
-                except json.JSONDecodeError:
-                    arguments = {"_raw": current["input"]}
-                tool_calls.append(
-                    ToolCall(
-                        id=current["id"],
-                        name=current["name"],
-                        arguments=arguments,
-                    )
-                )
-            yield LLMResponse(
-                content="".join(text_parts) or None,
-                tool_calls=tool_calls,
-                raw=response,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                total_tokens=total_tokens,
-            )
+        tool_calls = []
+        for current in tool_blocks.values():
+            try:
+                # A native zero-argument tool block need not carry input deltas.
+                arguments = json.loads(current["input"]) if current["input"] else {}
+            except json.JSONDecodeError as error:
+                raise LLMProtocolError("Bedrock tool arguments must contain valid JSON.") from error
+            tool_calls.append(_tool_call(current["id"], current["name"], arguments))
+        yield LLMResponse(
+            content="".join(text_parts) or None,
+            tool_calls=tool_calls or None,
+            raw=response,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            stop_reason=stop_reason,
+        )
+
 
     async def list_models(self, client: Any = None) -> List[ModelInfo]:
         bedrock = _management_client(client)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import aclosing
 from typing import (
     Any,
     AsyncIterator,
@@ -19,6 +20,7 @@ from typing import (
 from pydantic import BaseModel
 
 from kestrel_sdk.llm import (
+    LLMProtocolError,
     LLMResponse,
     ProviderCapabilities,
     StructuredOutputMode,
@@ -136,6 +138,39 @@ def completion_kwargs(
     return extra
 
 
+def _single_choice(choices: Any, *, allow_empty: bool = False) -> Any:
+    """One selected generation; usage-only stream trailers may have none."""
+    if not isinstance(choices, list):
+        raise LLMProtocolError("OpenAI completion choices must be a list.")
+    if not choices and allow_empty:
+        return None
+    if len(choices) != 1 or type(getattr(choices[0], "index", None)) is not int or choices[0].index != 0:
+        raise LLMProtocolError("OpenAI completion must contain one choice with index zero.")
+    return choices[0]
+
+
+def _native_finish_reason(choice: Any) -> Optional[str]:
+    reason = getattr(choice, "finish_reason", None)
+    if reason is not None and (type(reason) is not str or not reason):
+        raise LLMProtocolError("OpenAI finish_reason must be a non-empty string or null.")
+    return reason
+
+
+def _tool_call(call_id: Any, name: Any, arguments: Any) -> ToolCall:
+    """Decode one complete native call without repairing malformed evidence."""
+    if any(type(value) is not str or not value for value in (call_id, name)):
+        raise LLMProtocolError("OpenAI tool call requires its native id and name.")
+    if type(arguments) is not str:
+        raise LLMProtocolError("OpenAI tool arguments must be a JSON object string.")
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as error:
+        raise LLMProtocolError("OpenAI tool arguments must contain valid JSON.") from error
+    if not isinstance(parsed, dict):
+        raise LLMProtocolError("OpenAI tool arguments must contain a JSON object.")
+    return ToolCall(id=call_id, name=name, arguments=parsed)
+
+
 def to_llm_response(response: Any) -> LLMResponse:
     """Convert a non-streaming SDK response while preserving the raw object.
 
@@ -143,18 +178,17 @@ def to_llm_response(response: Any) -> LLMResponse:
     ``raw.choices[0].message``. Keep the full response here so callers retain
     provider-specific metadata and usage details.
     """
-    message = response.choices[0].message
+    choice = _single_choice(getattr(response, "choices", None))
+    message = choice.message
     tool_calls = None
     if getattr(message, "tool_calls", None):
         tool_calls = []
         for call in message.tool_calls:
-            try:
-                args = json.loads(call.function.arguments)
-            except json.JSONDecodeError:
-                args = {"_raw": call.function.arguments}
-            tool_calls.append(
-                ToolCall(id=call.id, name=call.function.name, arguments=args)
-            )
+            function = getattr(call, "function", None)
+            tool_calls.append(_tool_call(
+                getattr(call, "id", None), getattr(function, "name", None),
+                getattr(function, "arguments", None),
+            ))
 
     usage = getattr(response, "usage", None)
     return LLMResponse(
@@ -164,6 +198,7 @@ def to_llm_response(response: Any) -> LLMResponse:
         input_tokens=getattr(usage, "prompt_tokens", None),
         output_tokens=getattr(usage, "completion_tokens", None),
         total_tokens=getattr(usage, "total_tokens", None),
+        stop_reason=_native_finish_reason(choice),
     )
 
 
@@ -185,99 +220,108 @@ async def stream_with_tool_calls(
     emits exactly one marker for each call before yielding the final assembled
     ``LLMResponse``.
     """
-    extra = completion_kwargs(
-        None,
-        tools,
-        response_format,
-        kwargs,
-        passthrough_keys=passthrough_keys,
-    )
+    extra = completion_kwargs(None, tools, response_format, kwargs, passthrough_keys=passthrough_keys)
     extra["stream_options"] = {"include_usage": True}
-
     stream = await client.chat.completions.create(
-        model=model,
-        messages=message_normalizer(messages),
-        stream=True,
-        **extra,
+        model=model, messages=message_normalizer(messages), stream=True, **extra,
     )
-
     tool_calls: Dict[int, Dict[str, str]] = {}
     text_content = ""
     reasoning_content = ""
-    input_tokens = None
-    output_tokens = None
-    total_tokens = None
+    input_tokens = output_tokens = total_tokens = None
+    stop_reason = None
 
-    async for chunk in stream:
-        usage = getattr(chunk, "usage", None)
-        if usage:
-            input_tokens = getattr(usage, "prompt_tokens", None)
-            output_tokens = getattr(usage, "completion_tokens", None)
-            total_tokens = getattr(usage, "total_tokens", None)
+    async with stream:
+        async for chunk in stream:
+            usage = getattr(chunk, "usage", None)
+            if usage is not None:
+                if getattr(usage, "prompt_tokens", None) is not None:
+                    input_tokens = usage.prompt_tokens
+                if getattr(usage, "completion_tokens", None) is not None:
+                    output_tokens = usage.completion_tokens
+                if getattr(usage, "total_tokens", None) is not None:
+                    total_tokens = usage.total_tokens
 
-        if not getattr(chunk, "choices", None):
-            continue
+            choice = _single_choice(getattr(chunk, "choices", None), allow_empty=True)
+            if choice is None:
+                continue
+            reason = _native_finish_reason(choice)
+            delta = choice.delta
+            content = getattr(delta, "content", None)
+            reasoning = getattr(delta, "reasoning_content", None)
+            deltas = getattr(delta, "tool_calls", None) or []
+            if stop_reason is not None:
+                if content or reasoning or deltas:
+                    raise LLMProtocolError("OpenAI stream returned content after terminal evidence.")
+                if reason is not None and reason != stop_reason:
+                    raise LLMProtocolError("OpenAI stream returned conflicting terminal reasons.")
 
-        delta = chunk.choices[0].delta
-        delta_reasoning = getattr(delta, "reasoning_content", None)
-        if isinstance(delta_reasoning, str) and delta_reasoning:
-            reasoning_content += delta_reasoning
+            if isinstance(reasoning, str) and reasoning:
+                reasoning_content += reasoning
+            if isinstance(content, str) and content:
+                text_content += content
+                yield content
+            for delta_call in deltas:
+                index = delta_call.index
+                if type(index) is not int or index < 0:
+                    raise LLMProtocolError("OpenAI tool delta requires a non-negative integer index.")
+                is_new = index not in tool_calls
+                if is_new:
+                    tool_calls[index] = {"id": "", "name": "", "arguments": ""}
+                current = tool_calls[index]
+                function = getattr(delta_call, "function", None)
+                for key, value in (("id", getattr(delta_call, "id", None)), ("name", getattr(function, "name", None))):
+                    if value is None:
+                        continue
+                    if type(value) is not str or not value:
+                        raise LLMProtocolError("OpenAI tool identity fields must be non-empty strings.")
+                    if current[key] and current[key] != value:
+                        raise LLMProtocolError("OpenAI tool delta returned a conflicting native identity.")
+                    current[key] = value
+                if function is not None:
+                    arguments = getattr(function, "arguments", None)
+                    if arguments is not None:
+                        if type(arguments) is not str:
+                            raise LLMProtocolError("OpenAI tool argument fragments must be strings.")
+                        current["arguments"] += arguments
+                if is_new:
+                    yield ToolCallStarted(index=index, id=current["id"] or None, name=current["name"] or None)
+            if reason is not None:
+                stop_reason = reason
 
-        content = getattr(delta, "content", None)
-        if isinstance(content, str) and content:
-            text_content += content
-            yield content
+    parsed_tool_calls = []
+    for current in tool_calls.values():
+        # Native streams may finish a zero-argument call without JSON deltas.
+        parsed_tool_calls.append(_tool_call(current["id"], current["name"], current["arguments"] or "{}"))
+    yield LLMResponse(
+        content=text_content or None, tool_calls=parsed_tool_calls or None,
+        raw={"reasoning_content": reasoning_content} if reasoning_content else None,
+        input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
+        stop_reason=stop_reason,
+    )
 
-        for tc_delta in getattr(delta, "tool_calls", None) or []:
-            idx = tc_delta.index
-            is_new = idx not in tool_calls
-            if is_new:
-                tool_calls[idx] = {"id": "", "name": "", "arguments": ""}
 
-            current = tool_calls[idx]
-            if getattr(tc_delta, "id", None):
-                current["id"] += tc_delta.id
-
-            function = getattr(tc_delta, "function", None)
-            if function:
-                if getattr(function, "name", None):
-                    current["name"] += function.name
-                if getattr(function, "arguments", None):
-                    current["arguments"] += function.arguments
-
-            if is_new:
-                yield ToolCallStarted(
-                    index=idx,
-                    id=current["id"] or None,
-                    name=current["name"] or None,
-                )
-
-    # This helper's terminal LLMResponse is the tool-call handoff contract used
-    # by Kestrel's orchestrator. Text-only streams are delivered as text chunks;
-    # provider reasoning only needs replay when an assistant tool-call message
-    # will be sent back with tool results.
-    if tool_calls:
-        parsed_tool_calls = []
-        for idx in sorted(tool_calls):
-            tc_data = tool_calls[idx]
-            try:
-                args = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
-            except json.JSONDecodeError:
-                args = {"_raw": tc_data["arguments"]}
-
-            parsed_tool_calls.append(
-                ToolCall(
-                    id=tc_data["id"],
-                    name=tc_data["name"],
-                    arguments=args,
-                )
-            )
-
-        yield LLMResponse(
-            content=text_content or None,
-            tool_calls=parsed_tool_calls,
-            raw={"reasoning_content": reasoning_content} if reasoning_content else None,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            total_tokens=total_tokens,
-        )
+async def stream_text_only(
+    client: Any,
+    model: str,
+    messages: List[Dict[str, Any]],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    response_format: Optional[Type[BaseModel]] = None,
+    passthrough_keys: Iterable[str] = STANDARD_COMPLETION_KWARGS,
+    message_normalizer: MessageNormalizer = normalize_messages,
+    **kwargs: Any,
+) -> AsyncIterator[Union[str, LLMResponse]]:
+    """Project the canonical stream without accepting any tool evidence."""
+    if tools:
+        raise LLMProtocolError("Plain streaming does not accept tools; use the with-tools method.")
+    async with aclosing(stream_with_tool_calls(
+        client, model, messages, None, response_format,
+        passthrough_keys=passthrough_keys, message_normalizer=message_normalizer, **kwargs,
+    )) as stream:
+        async for item in stream:
+            if isinstance(item, ToolCallStarted) or (
+                isinstance(item, LLMResponse)
+                and (item.has_tool_calls or item.stop_reason in {"tool_calls", "function_call"})
+            ):
+                raise LLMProtocolError("Plain streaming received unexpected tool evidence.")
+            yield item

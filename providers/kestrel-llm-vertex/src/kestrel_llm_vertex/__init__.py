@@ -6,12 +6,18 @@ import base64
 import json
 import os
 import uuid
+from contextlib import AsyncExitStack, aclosing
+from contextvars import ContextVar
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, AsyncIterator, Dict, List, Optional, Type, Union
 
 from pydantic import BaseModel
+import httpx2
 
 from kestrel_sdk.llm import (
     LLMAdapter,
+    LLMProtocolError,
     LLMResponse,
     ModelCategory,
     ModelInfo,
@@ -35,29 +41,84 @@ def _load_genai() -> Any:
     return genai
 
 
-def _client_from_config(config: Dict[str, Any]) -> Any:
+@dataclass(frozen=True)
+class VertexClient:
+    """The native SDK and its explicitly owned asynchronous transport."""
+
+    genai: Any
+    http: httpx2.AsyncClient
+    responses: ContextVar
+
+    async def close(self) -> None:
+        async with AsyncExitStack() as cleanup:
+            cleanup.push_async_callback(self.http.aclose)
+            cleanup.callback(self.genai.close)
+            cleanup.push_async_callback(self.genai.aio.aclose)
+
+
+def _require_client(client: Any) -> VertexClient:
+    if not isinstance(client, VertexClient):
+        raise TypeError("Vertex operations require the owned client returned by create_provider.")
+    return client
+
+
+async def _sdk_chunks(client: VertexClient, **request: Any) -> AsyncIterator[Any]:
+    """Close physical responses before the SDK's suspended forwarding layers."""
+    client = _require_client(client)
+    responses = []
+    stream = None
+    try:
+        token = client.responses.set(responses)
+        try:
+            stream = await client.genai.aio.models.generate_content_stream(**request)
+        finally:
+            client.responses.reset(token)
+        while True:
+            token = client.responses.set(responses)
+            try:
+                try:
+                    chunk = await anext(stream)
+                except StopAsyncIteration:
+                    return
+            finally:
+                client.responses.reset(token)
+            if not responses:
+                raise LLMProtocolError("Vertex stream did not use its owned native HTTPX2 transport.")
+            yield chunk
+    finally:
+        async with AsyncExitStack() as cleanup:
+            if stream is not None:
+                cleanup.push_async_callback(stream.aclose)
+            for response in responses:
+                cleanup.push_async_callback(response.aclose)
+
+
+def _client_from_config(config: Dict[str, Any]) -> VertexClient:
     genai = _load_genai()
     api_key = (
         config.get("api_key")
         or os.environ.get(config.get("api_key_env") or "GOOGLE_API_KEY")
         or os.environ.get("GEMINI_API_KEY")
     )
-    if api_key:
-        return genai.Client(api_key=api_key)
-
-    project_id = (
+    if api_key and any(os.environ.get(name, "").lower() in {"true", "1"}
+                       for name in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GENAI_USE_ENTERPRISE")):
+        raise ValueError(
+            "Vertex express mode selected by Google SDK environment is not supported by this API-key route. "
+            "Use Vertex project credentials, or clear the Vertex mode flags to select the Gemini API."
+        )
+    project_id = None if api_key else (
         config.get("project_id")
         or os.environ.get("GOOGLE_CLOUD_PROJECT")
         or os.environ.get("GCP_PROJECT_ID")
         or _project_from_credentials(config.get("credentials_file"))
     )
-    if not project_id:
+    if not api_key and not project_id:
         raise ValueError(
             "vertex_ai:api requires GOOGLE_API_KEY, GEMINI_API_KEY, "
             "GOOGLE_CLOUD_PROJECT, GCP_PROJECT_ID, or credentials with project_id"
         )
 
-    client_kwargs: Dict[str, Any] = {
+    client_kwargs: Dict[str, Any] = {"api_key": api_key, "vertexai": False} if api_key else {
         "vertexai": True,
         "project": project_id,
         "location": config.get("location")
@@ -67,14 +128,29 @@ def _client_from_config(config: Dict[str, Any]) -> Any:
     credentials_file = config.get("credentials_file") or os.environ.get(
         "GOOGLE_APPLICATION_CREDENTIALS"
     )
-    if credentials_file:
+    if credentials_file and not api_key:
         from google.oauth2 import service_account
 
         client_kwargs["credentials"] = service_account.Credentials.from_service_account_file(
             credentials_file,
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
-    return genai.Client(**client_kwargs)
+    from google.auth.transport import mtls
+    from google.genai.types import HttpOptions
+
+    if not api_key and mtls.should_use_client_cert():
+        raise ValueError("Vertex owned HTTPX2 transport does not support automatic client-certificate mTLS.")
+    responses = ContextVar("vertex_native_responses", default=None)
+
+    async def capture(response: Any) -> None:
+        sink = responses.get()
+        if sink is not None:
+            sink.append(response)
+
+    options = HttpOptions(base_url=config.get("base_url"), api_version=config.get("api_version"))
+    http = httpx2.AsyncClient(event_hooks={"response": [capture]})
+    options.httpx_async_client = http
+    return VertexClient(genai.Client(**client_kwargs, http_options=options), http, responses)
 
 
 def _project_from_credentials(credentials_file: Optional[str] = None) -> Optional[str]:
@@ -274,8 +350,19 @@ def _generation_config(
 def _extract_response(response: Any) -> LLMResponse:
     content = None
     parsed_tool_calls = []
+    candidates = getattr(response, "candidates", None)
+    if candidates is None:
+        candidates = []
+    if not isinstance(candidates, list) or len(candidates) > 1:
+        raise LLMProtocolError("Vertex completion must not contain alternative candidates.")
+    stop_reason = None
 
-    for candidate in getattr(response, "candidates", None) or []:
+    for candidate in candidates:
+        stop_reason = getattr(candidate, "finish_reason", None)
+        if isinstance(stop_reason, Enum):
+            stop_reason = stop_reason.value
+        if stop_reason is not None and (type(stop_reason) is not str or not stop_reason):
+            raise LLMProtocolError("Vertex finish_reason must have a non-empty string value or be absent.")
         candidate_content = getattr(candidate, "content", None)
         for part in getattr(candidate_content, "parts", None) or []:
             text = getattr(part, "text", None)
@@ -312,6 +399,7 @@ def _extract_response(response: Any) -> LLMResponse:
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
+        stop_reason=stop_reason,
     )
 
 
@@ -395,7 +483,7 @@ class VertexAIAdapter(LLMAdapter):
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
     ) -> LLMResponse:
-        genai_client = client if client else _client_from_config({})
+        genai_client = _require_client(client).genai
         system_prompt, contents = normalize_vertex_messages(messages)
         response = await genai_client.aio.models.generate_content(
             model=model,
@@ -413,25 +501,45 @@ class VertexAIAdapter(LLMAdapter):
         tools: Optional[List[Dict[str, Any]]] = None,
         response_format: Optional[Type[BaseModel]] = None,
         **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        genai_client = client if client else _client_from_config({})
+    ) -> AsyncIterator[str | LLMResponse]:
+        if tools:
+            raise LLMProtocolError("Plain Vertex streaming does not accept tools.")
         system_prompt, contents = normalize_vertex_messages(messages)
-        stream = await genai_client.aio.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=_generation_config(system_prompt, None, tools, response_format, kwargs)
-            or None,
+        stream = _sdk_chunks(_require_client(client),
+            model=model, contents=contents,
+            config=_generation_config(system_prompt, None, None, response_format, kwargs) or None,
         )
-        async for chunk in stream:
-            text = getattr(chunk, "text", None)
-            if text:
-                yield text
-                continue
-            for candidate in getattr(chunk, "candidates", None) or []:
-                for part in getattr(getattr(candidate, "content", None), "parts", None) or []:
-                    text = getattr(part, "text", None)
-                    if text:
-                        yield text
+        text_parts = []
+        stop_reason = None
+        input_tokens = output_tokens = total_tokens = None
+        last_raw = None
+        async with aclosing(stream):
+            async for chunk in stream:
+                response = _extract_response(chunk)
+                last_raw = chunk
+                if response.tool_calls:
+                    raise LLMProtocolError("Plain Vertex streaming received unexpected tool evidence.")
+                if stop_reason is not None:
+                    if response.content:
+                        raise LLMProtocolError("Vertex stream returned content after terminal evidence.")
+                    if response.stop_reason is not None and response.stop_reason != stop_reason:
+                        raise LLMProtocolError("Vertex stream returned conflicting terminal reasons.")
+                if response.content:
+                    text_parts.append(response.content)
+                    yield response.content
+                if response.stop_reason is not None:
+                    stop_reason = response.stop_reason
+                if response.input_tokens is not None:
+                    input_tokens = response.input_tokens
+                if response.output_tokens is not None:
+                    output_tokens = response.output_tokens
+                if response.total_tokens is not None:
+                    total_tokens = response.total_tokens
+        yield LLMResponse(
+            content="".join(text_parts) or None, raw=last_raw,
+            input_tokens=input_tokens, output_tokens=output_tokens, total_tokens=total_tokens,
+            stop_reason=stop_reason,
+        )
 
     async def get_streaming_response_with_tools(
         self,
@@ -461,19 +569,21 @@ class VertexAIAdapter(LLMAdapter):
                 return
             if response.content:
                 yield response.content
+            yield response
             return
 
-        async for chunk in self.get_streaming_response(
+        async with aclosing(self.get_streaming_response(
             client,
             model,
             messages,
             response_format=response_format,
             **kwargs,
-        ):
-            yield chunk
+        )) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def list_models(self, client: Any = None) -> List[ModelInfo]:
-        genai_client = client if client else _client_from_config({})
+        genai_client = _require_client(client).genai
         models = []
         # AsyncPager.__anext__ fetches the next page when the current page is
         # exhausted, so async iteration walks all SDK pages.

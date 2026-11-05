@@ -6,6 +6,8 @@ on:
       - "providers/**"
       - "tests/unit/providers/**"
       - "scripts/llm_provider_packages.sh"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/llm-provider-packages.yml"
   push:
     branches: [main]
@@ -13,6 +15,8 @@ on:
       - "providers/**"
       - "tests/unit/providers/**"
       - "scripts/llm_provider_packages.sh"
+      - "pyproject.toml"
+      - "uv.lock"
       - ".github/workflows/llm-provider-packages.yml"
   workflow_dispatch:
     inputs:
@@ -35,7 +39,14 @@ permissions:
 
 jobs:
   provider-packages:
-    runs-on: ubuntu-latest
+    name: Providers (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
@@ -45,13 +56,20 @@ jobs:
           enable-cache: true
 
       - name: Set up Python
-        run: uv python install 3.14
+        run: uv python install ${{ matrix.python }}
 
       - name: Install Kestrel test environment
-        run: uv sync --group test
+        run: uv sync --locked --python ${{ matrix.python }} --group test
 
       - name: Verify provider packages
+        shell: bash
         run: scripts/llm_provider_packages.sh verify
+
+      - name: Install the optional aiohttp transport alongside HTTPX
+        run: uv pip install "aiohttp>=3.14,<4"
+
+      - name: Verify native clients with aiohttp present
+        run: uv run --locked --no-sync --group test pytest tests/unit/providers/test_backend_completion_streams.py tests/unit/providers/test_native_stream_ownership.py tests/unit/providers/test_llm_provider_plugins.py
 
   build:
     name: Build selected package
